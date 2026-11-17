@@ -5,6 +5,59 @@ import { Store } from "../src/state.mjs";
 import { runWorker } from "../src/pane.mjs";
 import { temporary } from "./helpers.mjs";
 import { requestWorker } from "../src/control.mjs";
+import { setTimeout as delay } from "node:timers/promises";
+
+test("continuation metadata waits for the actual attached agent and records acceptance", async (t) => {
+  const store = new Store(temporary(t)),
+    id = randomUUID();
+  await store.create({
+    id,
+    namespace: "test",
+    localRoot: temporary(t),
+    vm: { serverId: "vm", hostKey: "pin", initialized: true },
+    phase: "ready",
+    config: {
+      adapter: { launch: "agent", resume: "agent resume", authCheck: "true" },
+    },
+  });
+  let detected = false,
+    acceptedWhileAttached = false;
+  const remote = {
+    auth: () => {},
+    ensureWorker: () => {},
+    attach: async () => {
+      await delay(30);
+      detected = true;
+      for (let i = 0; i < 100; i++) {
+        if (store.get(id).transport.sessionMetadata === true) {
+          acceptedWhileAttached = true;
+          break;
+        }
+        await delay(10);
+      }
+      detected = false;
+      return { code: 0 };
+    },
+    inspectSession: () => ({ status: "detached" }),
+  };
+  await runWorker({
+    store,
+    id,
+    initialAction: "reconnect",
+    services: {
+      remote,
+      life: { owned: async () => ({ powerState: "running" }) },
+    },
+    resolvePane: () => "w1:p2",
+    registerSession: () => detected,
+    menuInput: async () => "q",
+    display: () => {},
+  });
+  assert.equal(acceptedWhileAttached, true);
+  assert.equal(store.get(id).transport.state, "detached");
+  assert.equal(store.get(id).transport.sessionMetadata, undefined);
+});
+
 test("transport return preserves owner pane and worker, queues reconnect, and never restarts or powers off the agent", async (t) => {
   const store = new Store(temporary(t)),
     id = randomUUID();

@@ -2,6 +2,7 @@ import fs from "node:fs";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
+import { setTimeout as delay } from "node:timers/promises";
 import { createInterface } from "node:readline/promises";
 import { ACTIONS } from "./constants.mjs";
 import { Store, namespace } from "./state.mjs";
@@ -243,24 +244,39 @@ export async function runWorker({
     });
     const attach = async () => {
       paneId = resolvePane(env);
-      const registered = registerSession(
-        id,
-        paneId,
-        recordAdapter(r).capabilities.herdrDetectionKind,
-        env,
-      );
       await store.update(id, (v) => ({
         ...v,
         workerPane: { paneId, pid: process.pid },
-        transport: { state: "attached", sessionMetadata: registered },
+        transport: { state: "attached", sessionMetadata: false },
       }));
       display(
         "Attached to the same tmux worker. Ctrl-b d returns here without stopping it. Closing this local pane also leaves compute allocated.",
       );
-      let exit;
+      let exit, metadata;
+      const registration = new AbortController();
       try {
-        exit = await remote.attach(r);
+        const attachment = remote.attach(r);
+        metadata = (async () => {
+          const kind = recordAdapter(r).capabilities.herdrDetectionKind;
+          for (let attempt = 0; attempt < 20; attempt++) {
+            if (registration.signal.aborted) return;
+            if (registerSession(id, paneId, kind, env)) {
+              await store.update(id, (v) => ({
+                ...v,
+                transport: { ...v.transport, sessionMetadata: true },
+              }));
+              return;
+            }
+            await delay(250, undefined, { signal: registration.signal });
+          }
+        })().catch((error) => {
+          if (error.name !== "AbortError")
+            display("Continuation metadata could not be recorded.");
+        });
+        exit = await attachment;
       } finally {
+        registration.abort();
+        await metadata;
         restoreTerminal();
       }
       let session;

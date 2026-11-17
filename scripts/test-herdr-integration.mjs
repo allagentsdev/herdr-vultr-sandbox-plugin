@@ -274,6 +274,10 @@ try {
       ["idle", "done"].includes(r.json?.result?.agent?.agent_status)
     );
   }, "Same dashboard did not reconnect through private IPC");
+  await until(
+    () => store.get(id).transport.sessionMetadata === true,
+    "Actual attached agent did not accept continuation metadata",
+  );
   cli(["agent", "prompt", pane, "exit-fixture"]);
   await delay(200);
   await until(
