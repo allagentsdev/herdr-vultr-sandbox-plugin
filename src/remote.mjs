@@ -138,7 +138,7 @@ export class Remote {
   async waitReady(r, { attempts = 24, interval = 2500 } = {}) {
     for (let i = 0; i < attempts; i++) {
       try {
-        this.command(r, "true");
+        this.command(r, "true", { timeout: 20000 });
         return;
       } catch {
         if (i + 1 < attempts) await delay(interval);

@@ -230,7 +230,7 @@ test("lost delete response retains exact approval and reconciles absence without
   assert.equal(submits, 1);
   assert.equal(f.store.get(f.id).vm, null);
 });
-test("release refuses checkpoint tampering and snapshot description changes", async (t) => {
+test("release refuses checkpoint tampering before deletion", async (t) => {
   const f = await fixture(t);
   await f.life.hibernate(f.id);
   await f.store.update(f.id, (r) => ({
@@ -274,4 +274,110 @@ test("transitioning power status never sends potentially restarting Start", asyn
     code: "status_pending",
   });
   assert.deepEqual(f.calls, []);
+});
+
+test("definitive provider rejections retain a terminal receipt and allow only the next explicit retry", async (t) => {
+  const { Cloud } = await import("../src/provider.mjs");
+  for (const kind of ["poweron", "snapshot", "delete", "create"]) {
+    const f = await fixture(t);
+    if (kind === "poweron") f.setPower("off");
+    if (kind === "create")
+      await f.store.update(f.id, (r) => ({ ...r, vm: null, snapshot: null }));
+    const request = f.api.request;
+    let attempts = 0,
+      created;
+    if (kind === "create") {
+      f.api.getServer = async () => created ?? null;
+      f.api.waitStatus = async () => created;
+    }
+    f.api.request = async (method, url, body) => {
+      attempts++;
+      if (attempts === 1)
+        return new Cloud("fake", {
+          fetch: async () => new Response("{}", { status: 429 }),
+        }).request(method, url, body);
+      if (kind === "create") {
+        created = {
+          id: "new-vm",
+          plan: "vc2-2c-4gb",
+          disk: 80,
+          main_ip: "192.0.2.1",
+          powerState: "running",
+          volumes: [],
+          tags: body.tags,
+        };
+        return { instance: created };
+      }
+      return request(method, url, body);
+    };
+    const invoke = () =>
+      kind === "create"
+        ? f.life.create(f.id, "ssh-ed25519 AAAA")
+        : kind === "snapshot"
+          ? f.life.hibernate(f.id)
+          : kind === "delete"
+            ? f.life.deleteServer(f.id, "DELETE vm")
+            : f.life.power(f.id, "poweron");
+    await assert.rejects(invoke(), { code: "provider_rejected" });
+    const rejected = f.store.get(f.id);
+    assert.equal(rejected.pending, null);
+    assert.equal(
+      rejected.lastRejectedOperation.kind,
+      kind === "poweron" ? "poweron" : kind,
+    );
+    assert.equal(rejected.lastRejectedOperation.httpStatus, 429);
+    assert.equal(attempts, 1, "No retry in the failed call");
+    await invoke();
+    assert.equal(attempts, 2);
+  }
+});
+test("release re-fetch refuses a changed snapshot description before DELETE", async (t) => {
+  const f = await fixture(t);
+  await f.life.hibernate(f.id);
+  const get = f.api.getImage;
+  f.api.getImage = async () => ({
+    ...(await get()),
+    description: "foreign operation",
+  });
+  await assert.rejects(f.life.release(f.id, "DELETE vm SNAPSHOT snap"), {
+    code: "snapshot_unusable",
+  });
+  assert.equal(
+    f.calls.some((c) => c.method === "DELETE"),
+    false,
+  );
+});
+
+test("rejected snapshot restore preserves hibernated phase and recovery identity", async (t) => {
+  const { Cloud } = await import("../src/provider.mjs");
+  const f = await fixture(t);
+  await f.store.update(f.id, (r) => ({
+    ...r,
+    vm: null,
+    phase: "hibernated",
+    snapshot: {
+      imageId: "saved",
+      description: "saved-operation",
+      plan: r.config.plan,
+      disk: 80,
+    },
+  }));
+  f.api.getImage = async () => ({
+    id: "saved",
+    description: "saved-operation",
+    status: "complete",
+    os_id: 2284,
+    size: 123,
+  });
+  f.api.request = (method, url, body) =>
+    new Cloud("fake", {
+      fetch: async () => new Response("{}", { status: 401 }),
+    }).request(method, url, body);
+  await assert.rejects(f.life.create(f.id, "ssh-ed25519 AAAA"), {
+    code: "provider_rejected",
+  });
+  const saved = f.store.get(f.id);
+  assert.equal(saved.phase, "hibernated");
+  assert.equal(saved.snapshot.imageId, "saved");
+  assert.equal(saved.pending, null);
 });

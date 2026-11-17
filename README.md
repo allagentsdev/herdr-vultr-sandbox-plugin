@@ -68,10 +68,15 @@ node /absolute/plugin/src/action.mjs reconnect --worker EXACT_WORKER_UUID
 ```
 
 The first stdout record is `VULTR_RESULT <JSON>`. `opened` means a pane launched,
-not that remote setup completed. `list`, `info`, `status` and `check-config` are
+not that remote setup completed. The receipt includes the exact new `paneId`. `list`, `info`, `status` and `check-config` are
 observations; they do not start compute. Explicit UUID selection resolves an
 ambiguous mapping. A live busy owner returns `busy` rather than typing into its
 agent. A private socket and process-lifetime lease retain one dashboard owner.
+Accepted dashboard requests return a `requestId`; `info` exposes the latest 20
+`controlRequests` with queued/running/completed/failed/cancelled/interrupted
+status and a safe code. Poll that exact request ID. An interrupted request is
+never automatically replayed. A completed reconnect means its handler returned;
+consult transport/provider state for the remote process and allocation.
 
 ## Reviewed source and unattended SSH onboarding
 
@@ -95,10 +100,17 @@ public client key is installed explicitly for root.
 All SSH connections use strict per-instance pins, isolated known-hosts, no host
 SSH configuration, no SSH agent and no forwarding. New boxes need no console or
 fingerprint ritual. A bounded pinned readiness wait handles boot delay without
-weakening trust. If provisioning does not apply the expected key, the connection
+weakening trust. Noninteractive SSH commands have a five-minute deadline
+(with shorter readiness probes) and server-alive checks; a timeout may leave a
+remote command applied and never grants blind lifecycle replay. Interactive
+owner login and agent attachments have a separate lifetime. If provisioning does not apply the expected key, the connection
 fails closed. `pin-host` is an explicit console-verified recovery surface for a
 missing saved pin; it does not replace an existing provisioned pin.
 
+A definitive rejected provider mutation retains a terminal
+`lastRejectedOperation` and permits the next explicit retry after rechecking its
+target and approvals. Timeouts, conflicts, incomplete responses and server
+errors retain the pending operation and never get that retry permission.
 Unknown create responses retain the operation/pin and search exact Vultr tags;
 there is no blind second POST. A missing mapped instance never grants replacement
 permission. Recover observes submitted operations; ambiguous/unobservable

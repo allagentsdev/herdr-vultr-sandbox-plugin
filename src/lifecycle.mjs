@@ -81,6 +81,32 @@ export class Lifecycle {
       },
     }));
   }
+  async submit(id, method, url, body) {
+    try {
+      return await this.api.request(method, url, body);
+    } catch (error) {
+      if (
+        error.code === "provider_rejected" &&
+        Number.isInteger(error.httpStatus) &&
+        error.httpStatus >= 400 &&
+        error.httpStatus < 500 &&
+        ![408, 409].includes(error.httpStatus)
+      ) {
+        await this.store.update(id, (r) => ({
+          ...r,
+          lastRejectedOperation: {
+            kind: r.pending.kind,
+            operation: r.pending.operation,
+            serverId: r.vm?.serverId ?? null,
+            httpStatus: error.httpStatus,
+            at: new Date().toISOString(),
+          },
+          pending: null,
+        }));
+      }
+      throw error;
+    }
+  }
   async create(id, publicKey) {
     return this.store.withLock(id, () => this.createLocked(id, publicKey));
   }
@@ -133,7 +159,7 @@ export class Lifecycle {
           }));
         }
         r = await this.attempted(id);
-        const result = await this.api.request("POST", "/instances", {
+        const result = await this.submit(id, "POST", "/instances", {
           label: `herdr-${id.slice(0, 8)}-${r.pending.operation.slice(0, 8)}`,
           region: r.config.region,
           plan: r.config.plan,
@@ -258,7 +284,7 @@ export class Lifecycle {
       r = await this.attempted(id);
       if (kind === "shutdown") await this.remote.shutdown(r);
       else
-        await this.api.request("POST", `/instances/${resourceId(s.id)}/start`);
+        await this.submit(id, "POST", `/instances/${resourceId(s.id)}/start`);
       r = await this.store.update(id, (v) => ({
         ...v,
         pending: { ...v.pending, acknowledged: true },
@@ -324,7 +350,7 @@ export class Lifecycle {
               );
             r = await this.attempted(id);
             image = (
-              await this.api.request("POST", "/snapshots", {
+              await this.submit(id, "POST", "/snapshots", {
                 instance_id: resourceId(r.vm.serverId),
                 description,
               })
@@ -436,7 +462,7 @@ export class Lifecycle {
         );
       if (!r.pending.attempted) {
         r = await this.attempted(id);
-        await this.api.request("DELETE", `/instances/${resourceId(serverId)}`);
+        await this.submit(id, "DELETE", `/instances/${resourceId(serverId)}`);
         await this.store.update(id, (v) => ({
           ...v,
           pending: { ...v.pending, acknowledged: true },

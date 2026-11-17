@@ -95,7 +95,7 @@ export async function serveWorker(store, id, handler) {
         let text = "";
         socket.setTimeout(1500, () => socket.destroy());
         socket.on("error", () => {});
-        socket.on("data", (chunk) => {
+        socket.on("data", async (chunk) => {
           text += chunk;
           if (text.length > 8192) return socket.destroy();
           if (!text.includes("\n")) return;
@@ -104,7 +104,7 @@ export async function serveWorker(store, id, handler) {
           try {
             const request = JSON.parse(text.split("\n")[0]);
             if (request.workerId !== id) throw Error();
-            result = handler(request.action);
+            result = await handler(request.action);
           } catch {
             result = { status: "invalid_request" };
           }

@@ -85,7 +85,18 @@ instance operation tags and snapshot descriptions let an unknown create or
 snapshot reconcile without duplicate POST. Power and deletion reconcile only
 observed target state; missing/unobservable state retains the receipt and
 allocation. GETs follow opaque cursor tokens against the fixed API origin;
-redirects are rejected and response bodies are never logged.
+redirects are rejected and response bodies are never logged. Definitive rejected
+mutations retain a terminal rejection receipt and permit a subsequent explicit
+retry with fresh target/approval checks. Timeout/conflict and unknown responses
+keep pending intent. Noninteractive SSH has bounded command deadlines and
+server-alive probes; a timeout does not prove nonexecution. Interactive owner
+login/attachment remains separately controlled.
+
+Pane-open receipts identify the exact created pane. Queued dashboard actions
+have correlated request IDs and the latest 20 receipts in worker info, including
+safe failure/cancellation codes. A new owner marks abandoned requests interrupted
+without replay. Completion of a UI handler does not imply successful provider
+allocation or a healthy remote agent; callers inspect those states separately.
 
 Never silently allocate a replacement for a missing live mapping. Resume from a
 saved snapshot is an explicit caller action and retains the logical worker UUID.

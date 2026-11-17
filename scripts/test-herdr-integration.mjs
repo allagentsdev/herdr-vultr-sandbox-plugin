@@ -167,7 +167,7 @@ try {
   const { runAction } = await import("../src/actions.mjs");
   const { openPluginPane } = await import("../src/herdr.mjs");
   let opened;
-  await runAction(
+  const openedReceipt = await runAction(
     "connect-vultr",
     {},
     {
@@ -185,6 +185,7 @@ try {
     },
   );
   const setupPane = JSON.parse(opened.stdout).result.plugin_pane.pane.pane_id;
+  assert.equal(openedReceipt.paneId, setupPane);
   await until(
     () =>
       cli([
@@ -255,7 +256,9 @@ try {
   const previousTitle = cli(["pane", "list"]).json.result.panes.find(
     (p) => p.pane_id === pane,
   ).terminal_title;
-  assert.equal((await requestWorker(store, id, "reconnect")).status, "queued");
+  const reconnectReceipt = await requestWorker(store, id, "reconnect");
+  assert.equal(reconnectReceipt.status, "queued");
+  assert.ok(reconnectReceipt.requestId);
   await until(() => {
     const title = cli(["pane", "list"]).json.result.panes.find(
       (p) => p.pane_id === pane,
@@ -285,6 +288,14 @@ try {
         "15",
       ]).stdout.includes("Vultr worker >"),
     "Second transport did not return",
+  );
+  assert.equal(
+    store
+      .get(id)
+      .controlRequests.find(
+        (request) => request.requestId === reconnectReceipt.requestId,
+      ).status,
+    "completed",
   );
   cli(["pane", "run", pane, "q"]);
   await until(

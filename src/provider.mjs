@@ -56,11 +56,17 @@ export class Cloud {
       );
     }
     if (response.status === 404 && method === "GET") return null;
-    if (!response.ok)
-      throw new PluginError(
-        response.status >= 500 ? "outcome_unknown" : "provider_rejected",
+    if (!response.ok) {
+      // A timeout/conflict response can still describe an in-flight mutation.
+      const uncertain =
+        response.status >= 500 || [408, 409].includes(response.status);
+      const error = new PluginError(
+        uncertain ? "outcome_unknown" : "provider_rejected",
         `Vultr returned HTTP ${response.status}; response body withheld.`,
       );
+      error.httpStatus = response.status;
+      throw error;
+    }
     if (response.status === 204) return {};
     try {
       return await response.json();

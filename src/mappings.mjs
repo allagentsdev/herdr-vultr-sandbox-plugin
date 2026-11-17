@@ -152,6 +152,8 @@ export function workerInfo(r) {
     agentConformance: a.conformance,
     capabilities: a.capabilities ?? {},
     transport: r.transport ?? { state: "not-observed" },
+    lastRejectedOperation: r.lastRejectedOperation ?? null,
+    controlRequests: r.controlRequests ?? [],
     pendingOperation: r.pending
       ? {
           kind: r.pending.kind,

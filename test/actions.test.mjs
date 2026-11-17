@@ -19,7 +19,14 @@ test("action launcher requires caller and targets supplied source even when anot
     {
       env: { HERDR_PLUGIN_STATE_DIR: temporary(t), HERDR_PANE_ID: "w1:p1" },
       context: { focused_pane_id: "w1:p2" },
-      openPane: (...args) => opens.push(args),
+      openPane: (...args) => {
+        opens.push(args);
+        return {
+          stdout: JSON.stringify({
+            result: { plugin_pane: { pane: { pane_id: "w1:p9" } } },
+          }),
+        };
+      },
     },
   );
   assert.equal(opens[0][2].targetPaneId, "w1:p2");
@@ -75,7 +82,14 @@ test("read-only mapping diagnostics do not open panes and actions reuse the live
       env,
       context,
       store,
-      openPane: (...args) => opens.push(args),
+      openPane: (...args) => {
+        opens.push(args);
+        return {
+          stdout: JSON.stringify({
+            result: { plugin_pane: { pane: { pane_id: "w1:p9" } } },
+          }),
+        };
+      },
       requestWorker: async () => ({ status: "busy", paneId: "w1:p2" }),
       focusPane: (id) => focus.push(id),
     };
@@ -165,7 +179,14 @@ test("setup opens independently of a live mapped worker and clears inherited age
       store,
       env,
       context: { focused_pane_id: "w1:p1" },
-      openPane: (...args) => opens.push(args),
+      openPane: (...args) => {
+        opens.push(args);
+        return {
+          stdout: JSON.stringify({
+            result: { plugin_pane: { pane: { pane_id: "w1:p9" } } },
+          }),
+        };
+      },
       requestWorker: () =>
         assert.fail("Provider setup must not enter worker control"),
     },
@@ -241,4 +262,46 @@ test("canonical and symlinked worker entrypoints run from another cwd while impo
     { cwd: dir, env: { PATH: process.env.PATH } },
   );
   assert.equal(r.stdout, "");
+});
+
+test("opened receipts identify the exact Herdr pane and queued receipts retain their request ID", async (t) => {
+  const { Store, namespace } = await import("../src/state.mjs");
+  const { randomUUID } = await import("node:crypto");
+  const store = new Store(temporary(t)),
+    env = { HERDR_PANE_ID: "w1:p1" },
+    context = { focused_pane_id: "w1:p1" };
+  const options = {
+    store,
+    env,
+    context,
+    openPane: () => ({
+      stdout: JSON.stringify({
+        result: { plugin_pane: { pane: { pane_id: "w1:p9" } } },
+      }),
+    }),
+  };
+  assert.equal((await runAction("connect-vultr", {}, options)).paneId, "w1:p9");
+  assert.equal((await runAction("reconnect", {}, options)).paneId, "w1:p9");
+  const id = randomUUID();
+  await store.create({
+    id,
+    namespace: namespace(env),
+    sourcePaneId: "w1:p1",
+    localRoot: temporary(t),
+    config: {},
+  });
+  const queued = await runAction(
+    "reconnect",
+    { worker: id },
+    {
+      ...options,
+      requestWorker: async () => ({
+        status: "queued",
+        paneId: "w1:p9",
+        requestId: "request-123",
+      }),
+      focusPane: () => {},
+    },
+  );
+  assert.equal(queued.requestId, "request-123");
 });

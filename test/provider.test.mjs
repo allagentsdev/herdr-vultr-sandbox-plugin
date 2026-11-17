@@ -85,6 +85,13 @@ test("snapshot polls complete rather than Hetzner actions and refuses failed sna
   assert.equal((await api.waitSnapshot("snap")).status, "complete");
   await assert.rejects(
     new Cloud("secret", {
+      fetch: async () =>
+        response({ snapshot: { id: "snap", status: "failed" } }),
+    }).waitSnapshot("snap"),
+    { code: "snapshot_unusable" },
+  );
+  await assert.rejects(
+    new Cloud("secret", {
       interval: 0,
       attempts: 1,
       fetch: async () =>
@@ -97,6 +104,8 @@ test("HTTP and transport unknown outcomes redact bodies, mutation 404 is not suc
   for (const [fetcher, code] of [
     [async () => response({ secret: "do-not-log" }, 401), "provider_rejected"],
     [async () => response({}, 503), "outcome_unknown"],
+    [async () => response({}, 408), "outcome_unknown"],
+    [async () => response({}, 409), "outcome_unknown"],
     [
       async () => {
         throw Error("do-not-log");

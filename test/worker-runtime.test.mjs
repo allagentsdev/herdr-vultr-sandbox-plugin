@@ -122,3 +122,233 @@ test("Recover finalizes an already authorized lost hibernate delete and never re
     assert.equal(r.pending, null);
   }
 });
+
+test("queued failures and cancelled approvals have correlated queryable receipts", async (t) => {
+  const { PluginError } = await import("../src/result.mjs");
+  const { workerInfo } = await import("../src/mappings.mjs");
+  for (const action of ["reconnect", "restart-agent"]) {
+    const store = new Store(temporary(t)),
+      id = randomUUID();
+    await store.create({
+      id,
+      namespace: "test",
+      localRoot: temporary(t),
+      vm: { serverId: "vm", hostKey: "pin", initialized: true },
+      phase: "ready",
+      config: {
+        adapter: { launch: "agent", resume: "agent resume", authCheck: "true" },
+      },
+    });
+    let submitted = false,
+      receipt;
+    const life = { owned: async () => ({ powerState: "running" }) },
+      remote = {
+        auth: () => {
+          throw new PluginError(
+            "auth_required",
+            "private output must not be stored",
+          );
+        },
+      };
+    await runWorker({
+      store,
+      id,
+      services: { life, remote },
+      resolvePane: () => "w1:p2",
+      display: () => {},
+      askInput: async () => "DECLINE",
+      menuInput: async () => {
+        if (submitted) return "q";
+        submitted = true;
+        receipt = await requestWorker(store, id, action);
+        return "";
+      },
+    });
+    assert.equal(receipt.status, "queued");
+    assert.ok(receipt.requestId);
+    const saved = workerInfo(store.get(id)).controlRequests.find(
+      (r) => r.requestId === receipt.requestId,
+    );
+    assert.equal(saved.action, action);
+    assert.equal(saved.status, action === "reconnect" ? "failed" : "cancelled");
+    assert.equal(
+      saved.code,
+      action === "reconnect" ? "auth_required" : "approval_declined",
+    );
+    assert.equal(JSON.stringify(saved).includes("private output"), false);
+  }
+});
+
+test("a new dashboard marks an abandoned queued request interrupted without replay", async (t) => {
+  const store = new Store(temporary(t)),
+    id = randomUUID(),
+    requestId = randomUUID();
+  await store.create({
+    id,
+    namespace: "test",
+    localRoot: temporary(t),
+    phase: "ready",
+    config: {},
+    controlRequests: [{ requestId, action: "stop", status: "queued" }],
+  });
+  await runWorker({
+    store,
+    id,
+    services: {},
+    resolvePane: () => "w1:p2",
+    display: () => {},
+    menuInput: async () => "q",
+  });
+  const receipt = store.get(id).controlRequests[0];
+  assert.equal(receipt.requestId, requestId);
+  assert.equal(receipt.status, "interrupted");
+  assert.equal(receipt.code, "previous_owner_lost");
+});
+
+test("a rejected acceptance write cannot queue an action and releases the acceptance slot", async (t) => {
+  const store = new Store(temporary(t)),
+    id = randomUUID();
+  await store.create({
+    id,
+    namespace: "test",
+    localRoot: temporary(t),
+    phase: "ready",
+    config: {},
+  });
+  const update = store.update.bind(store);
+  let reject = true,
+    first,
+    second,
+    menus = 0;
+  store.update = (worker, fn) =>
+    update(worker, (r) => {
+      const next = fn(r);
+      if (reject && next.controlRequests?.some((x) => x.status === "queued")) {
+        reject = false;
+        throw Error("disk full");
+      }
+      return next;
+    });
+  await runWorker({
+    store,
+    id,
+    services: {
+      life: {
+        status: async () => ({ providerStatus: "off" }),
+        power: () => assert.fail("Rejected action ran"),
+      },
+    },
+    resolvePane: () => "w1:p2",
+    display: () => {},
+    menuInput: async () => {
+      if (menus++) return "q";
+      first = await requestWorker(store, id, "stop");
+      second = await requestWorker(store, id, "status");
+      return "";
+    },
+  });
+  assert.equal(first.status, "invalid_request");
+  assert.equal(second.status, "queued");
+  assert.equal(store.get(id).controlRequests.length, 1);
+  assert.equal(store.get(id).controlRequests[0].requestId, second.requestId);
+  assert.equal(store.get(id).controlRequests[0].status, "completed");
+});
+
+test("closing a dashboard drains acceptance after client timeout before releasing ownership", async (t) => {
+  const { hasLiveOwner } = await import("../src/control.mjs");
+  const store = new Store(temporary(t)),
+    id = randomUUID();
+  await store.create({
+    id,
+    namespace: "test",
+    localRoot: temporary(t),
+    phase: "ready",
+    config: {},
+  });
+  const update = store.update.bind(store);
+  let enter, release, reply;
+  const entered = new Promise((resolve) => (enter = resolve)),
+    gate = new Promise((resolve) => (release = resolve));
+  store.update = async (worker, fn) => {
+    const next = fn(store.get(worker));
+    if (next.controlRequests?.some((x) => x.status === "queued")) {
+      enter();
+      await gate;
+    }
+    return update(worker, fn);
+  };
+  const worker = runWorker({
+    store,
+    id,
+    services: {
+      life: {
+        power: () => assert.fail("Closing owner replayed queued action"),
+      },
+    },
+    resolvePane: () => "w1:p2",
+    display: () => {},
+    menuInput: async () => {
+      reply = requestWorker(store, id, "stop", { timeout: 30 });
+      await entered;
+      return "q";
+    },
+  });
+  await entered;
+  assert.equal(await reply, null);
+  const retained = hasLiveOwner(store, id);
+  release();
+  await worker;
+  assert.equal(retained, true);
+  assert.equal(hasLiveOwner(store, id), false);
+  assert.equal(store.get(id).controlRequests[0].status, "interrupted");
+});
+
+test("queued login and attach failures never claim completed receipts", async (t) => {
+  for (const action of ["login", "reconnect"]) {
+    const store = new Store(temporary(t)),
+      id = randomUUID();
+    await store.create({
+      id,
+      namespace: "test",
+      localRoot: temporary(t),
+      phase: "ready",
+      vm: { serverId: "vm", hostKey: "pin", initialized: true },
+      config: {
+        adapter: { launch: "agent", resume: "agent resume", authCheck: "true" },
+      },
+    });
+    let menus = 0,
+      receipt;
+    const remote = {
+      auth: () => {},
+      ensureWorker: () => {},
+      login: async () => ({ code: 1 }),
+      attach: async () => ({ code: 255 }),
+      inspectSession: () => ({ status: "unavailable" }),
+    };
+    await runWorker({
+      store,
+      id,
+      services: {
+        life: { owned: async () => ({ powerState: "running" }) },
+        remote,
+      },
+      resolvePane: () => "w1:p2",
+      registerSession: () => true,
+      display: () => {},
+      menuInput: async () => {
+        if (menus++) return "q";
+        receipt = await requestWorker(store, id, action);
+        return "";
+      },
+    });
+    const saved = store
+      .get(id)
+      .controlRequests.find((x) => x.requestId === receipt.requestId);
+    assert.equal(saved.status, "failed");
+    assert.equal(
+      saved.code,
+      action === "login" ? "login_failed" : "transport_failed",
+    );
+  }
+});

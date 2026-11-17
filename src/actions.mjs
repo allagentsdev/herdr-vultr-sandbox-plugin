@@ -42,7 +42,7 @@ export async function runAction(action, { worker } = {}, options = {}) {
     };
   const open = options.openPane ?? openPluginPane;
   const openUI = (entrypoint, id = "") => {
-    open(entrypoint, context, {
+    const opened = open(entrypoint, context, {
       placement: "split",
       targetPaneId: pane,
       cwd: context.focused_pane_cwd ?? context.workspace_cwd,
@@ -55,7 +55,18 @@ export async function runAction(action, { worker } = {}, options = {}) {
         VULTR_SOURCE_CONTEXT: JSON.stringify(context),
       },
     });
-    return { status: "opened", workerId: id || null };
+    let paneId;
+    try {
+      paneId = JSON.parse(opened.stdout).result.plugin_pane.pane.pane_id;
+    } catch {
+      /* Applied outcome needs inspection, never automatic replay. */
+    }
+    if (typeof paneId !== "string" || !paneId)
+      throw new PluginError(
+        "pane_open_unknown",
+        "Herdr did not return the created pane ID. Inspect its panes before retrying.",
+      );
+    return { status: "opened", workerId: id || null, paneId };
   };
   if (action === "connect-vultr") return openUI("onboarding");
   let record = selectWorker(store, context, env, worker);
@@ -119,6 +130,7 @@ export async function runAction(action, { worker } = {}, options = {}) {
         status: result.status,
         workerId: worker,
         paneId: result.paneId ?? null,
+        ...(result.requestId ? { requestId: result.requestId } : {}),
       };
     }
   }

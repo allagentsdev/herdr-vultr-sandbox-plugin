@@ -3,6 +3,7 @@ import { fileURLToPath } from "node:url";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { createInterface } from "node:readline/promises";
+import { ACTIONS } from "./constants.mjs";
 import { Store, namespace } from "./state.mjs";
 import { readPrivate } from "./config.mjs";
 import { captureSnapshot, readSnapshot } from "./manifest.mjs";
@@ -154,14 +155,55 @@ export async function runWorker({
     paneId = resolvePane(env),
     busy = true,
     queued = null,
-    wake = null;
-  const close = await serveWorker(store, id, (action) => {
+    wake = null,
+    controlRequestId = null,
+    acceptance = null;
+  const recordRequest = (requestId, action, status, code = null) =>
+    store.update(id, (v) => {
+      const requests = v.controlRequests ?? [];
+      const previous = requests.find((x) => x.requestId === requestId);
+      const record = {
+        requestId,
+        action,
+        status,
+        code,
+        acceptedAt: previous?.acceptedAt ?? new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      };
+      return {
+        ...v,
+        controlRequests: [
+          ...requests.filter((x) => x.requestId !== requestId),
+          record,
+        ].slice(-20),
+      };
+    });
+  const interruptRequests = (requests, code) =>
+    (requests ?? []).map((request) =>
+      ["queued", "running"].includes(request.status)
+        ? {
+            ...request,
+            status: "interrupted",
+            code,
+            updatedAt: new Date().toISOString(),
+          }
+        : request,
+    );
+  const close = await serveWorker(store, id, async (action) => {
     paneId = resolvePane(env);
     if (action === "ping") return { status: "alive", paneId };
-    if (busy || queued) return { status: "busy", paneId };
-    queued = action;
-    wake?.();
-    return { status: "queued", paneId };
+    if (!ACTIONS.includes(action)) return { status: "invalid_request", paneId };
+    if (busy || queued || acceptance) return { status: "busy", paneId };
+    const requestId = randomUUID();
+    acceptance = recordRequest(requestId, action, "queued");
+    try {
+      await acceptance;
+      queued = { action, requestId };
+      wake?.();
+      return { status: "queued", paneId, requestId };
+    } finally {
+      acceptance = null;
+    }
   });
   let api, ssh, remote, life;
   try {
@@ -169,6 +211,10 @@ export async function runWorker({
       ...v,
       workerPane: { paneId, pid: process.pid },
       transport: { state: "dashboard" },
+      controlRequests: interruptRequests(
+        v.controlRequests,
+        "previous_owner_lost",
+      ),
     }));
     if (services) ({ api, ssh, remote, life } = services);
     else {
@@ -235,11 +281,33 @@ export async function runWorker({
       display(
         `Transport returned: ${session.status}. Compute power is not inferred; choose Status for provider confirmation.`,
       );
+      if (exit?.code !== 0 || exit?.signal)
+        throw new PluginError(
+          "transport_failed",
+          "SSH attachment ended unsuccessfully; remote process and provider state require observation.",
+        );
+    };
+    const login = async () => {
+      let exit;
+      try {
+        exit = await remote.login(r);
+      } finally {
+        restoreTerminal();
+      }
+      if (exit?.code !== 0 || exit?.signal)
+        throw new PluginError(
+          "login_failed",
+          "Remote login process ended unsuccessfully; complete owner login before reconnecting.",
+        );
     };
     let action = initialAction;
     while (true) {
       busy = true;
       r = store.get(id);
+      let terminalStatus = "completed",
+        terminalCode = null;
+      if (controlRequestId)
+        await recordRequest(controlRequestId, action, "running");
       try {
         switch (action) {
           case "start-agent": {
@@ -272,11 +340,7 @@ export async function runWorker({
             display(
               "Source is ready. Complete independent remote agent login. Host authentication and private skills were not copied.",
             );
-            try {
-              await remote.login(r);
-            } finally {
-              restoreTerminal();
-            }
+            await login();
             r = await connections.prepare(id, "reconnect");
             await attach();
             break;
@@ -286,11 +350,7 @@ export async function runWorker({
             break;
           case "login":
             r = await pin();
-            try {
-              await remote.login(r);
-            } finally {
-              restoreTerminal();
-            }
+            await login();
             break;
           case "reconnect":
           case "resume":
@@ -305,8 +365,11 @@ export async function runWorker({
               (await askInput(
                 `Type RESTART ${id} to resume a confirmed exited agent > `,
               )) !== `RESTART ${id}`
-            )
+            ) {
+              terminalStatus = "cancelled";
+              terminalCode = "approval_declined";
               break;
+            }
             r = await connections.prepare(id, "restart-agent");
             await attach();
             break;
@@ -402,7 +465,11 @@ export async function runWorker({
                   ),
                 ),
               );
-            else display("Review retained. Local files unchanged.");
+            else {
+              terminalStatus = "cancelled";
+              terminalCode = "approval_declined";
+              display("Review retained. Local files unchanged.");
+            }
             break;
           }
           case undefined:
@@ -415,18 +482,34 @@ export async function runWorker({
             );
         }
       } catch (error) {
+        terminalStatus = ["upload_cancelled", "approval_required"].includes(
+          error.code,
+        )
+          ? "cancelled"
+          : "failed";
+        terminalCode =
+          error instanceof PluginError ? error.code : "unexpected_error";
         display(
           error instanceof PluginError
             ? error.message
             : "Operation failed. Retained worker state is available for recovery.",
         );
+      } finally {
+        if (controlRequestId)
+          await recordRequest(
+            controlRequestId,
+            action,
+            terminalStatus,
+            terminalCode,
+          );
+        controlRequestId = null;
       }
       busy = false;
       display(
         `Worker ${id} — reconnect | resume | login | status | info | recover | apply-changes | hibernate | stop | restart-agent | replace | forget | delete-server | q`,
       );
       if (queued) {
-        action = queued;
+        ({ action, requestId: controlRequestId } = queued);
         queued = null;
         continue;
       }
@@ -451,7 +534,7 @@ export async function runWorker({
         }
       } catch (error) {
         if (error.name !== "AbortError") throw error;
-        action = queued;
+        ({ action, requestId: controlRequestId } = queued);
         queued = null;
       } finally {
         wake = null;
@@ -459,9 +542,20 @@ export async function runWorker({
       if (action === "q") return;
     }
   } finally {
+    busy = true;
+    await acceptance?.catch(() => {});
     await close();
     await store.update(id, (v) =>
-      v.workerPane?.pid === process.pid ? { ...v, workerPane: null } : v,
+      v.workerPane?.pid === process.pid
+        ? {
+            ...v,
+            workerPane: null,
+            controlRequests: interruptRequests(
+              v.controlRequests,
+              "owner_closed",
+            ),
+          }
+        : v,
     );
   }
 }

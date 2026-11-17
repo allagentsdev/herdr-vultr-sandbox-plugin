@@ -14,7 +14,11 @@ npm run test:package
 `check` runs formatting, ESLint, manifest validation and Node tests. The tests
 exercise fake provider contracts, real Git/source receivers, isolated tmux,
 private socket ownership, exact approvals and recovery. No Vultr credential is
-read and no Vultr resource is created by them. The reference source/patch
+read and no Vultr resource is created by them. Noninteractive SSH deadlines, definitive rejection retry, queryable queued
+failures/cancellations, exact opened pane IDs and interrupted-owner receipts
+have discriminating regressions. Release re-fetch checks snapshot-description
+tampering without deleting the instance; real tmux observations use bounded
+state polling. The reference source/patch
 characterization passed before adaptation; the rewritten Vultr provider and
 lifecycle tests failed against the old implementation before the new methods
 were written.
@@ -62,7 +66,9 @@ resources. Successful output is a limited observation, not full lifecycle or
 authenticated-agent conformance. The broader trial checklist is in the capability
 matrix. Deletion always remains an exact-target user approval in the dashboard.
 
-Private logs for this implementation are retained outside Git. The PR records
+Private logs for this implementation are retained outside Git. The generated host-key cloud-config also validated with zero errors against the
+official Canonical cloud-init 25.3 schema. Temporary private key data was deleted
+and never logged. The PR records
 check counts, official binary version/hash, production package smoke and the
 actual independent review receipt. Live Vultr and authenticated coding-agent
 conformance remain explicitly pending.

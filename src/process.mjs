@@ -8,6 +8,8 @@ export function runSync(command, args = [], options = {}) {
     env: options.env ?? process.env,
     encoding: options.encoding === null ? null : "utf8",
     input: options.input,
+    timeout: options.timeout,
+    killSignal: options.killSignal,
     maxBuffer: options.maxBuffer ?? 32 * 1024 * 1024,
     stdio: options.stdio ?? [
       options.input === undefined ? "ignore" : "pipe",
@@ -15,6 +17,11 @@ export function runSync(command, args = [], options = {}) {
       "pipe",
     ],
   });
+  if (result.error?.code === "ETIMEDOUT")
+    throw new PluginError(
+      "command_timeout",
+      `${command} exceeded its deadline; any remote outcome remains uncertain.`,
+    );
   if (result.error) {
     throw new PluginError(
       "command_start_failed",

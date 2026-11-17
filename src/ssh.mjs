@@ -67,6 +67,10 @@ export function sshArgs(config, r, knownHosts, { tty = false } = {}) {
     "BatchMode=yes",
     "-o",
     "ConnectTimeout=15",
+    "-o",
+    "ServerAliveInterval=15",
+    "-o",
+    "ServerAliveCountMax=3",
     tty ? "-tt" : "-T",
     `root@${r.vm.ip}`,
   ];
@@ -138,6 +142,7 @@ export class SSH {
       maxBuffer = 32 * 1024 * 1024,
       agentKind,
       check = true,
+      timeout = 300000,
     } = {},
   ) {
     const env = { ...process.env };
@@ -146,7 +151,15 @@ export class SSH {
     return this.run(
       "ssh",
       [...sshArgs(this.config, r, this.knownHosts(r), { tty }), command],
-      { input, maxBuffer, env, check, ...(tty ? { stdio: "inherit" } : {}) },
+      {
+        input,
+        maxBuffer,
+        env,
+        check,
+        timeout,
+        killSignal: "SIGKILL",
+        ...(tty ? { stdio: "inherit" } : {}),
+      },
     );
   }
   interactive(r, command, { agentKind } = {}) {

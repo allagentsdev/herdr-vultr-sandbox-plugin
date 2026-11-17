@@ -68,7 +68,25 @@ test("real isolated tmux reattaches without duplicate launch and retains agent e
     .replace(/exec tmux .*attach-session.*/, "true");
   runSync("bash", ["-c", command]);
   runSync("bash", ["-c", command]);
-  await new Promise((resolve) => setTimeout(resolve, 1300));
+  for (let i = 0; i < 150; i++) {
+    if (
+      runSync(
+        "tmux",
+        [
+          "-S",
+          socket,
+          "display-message",
+          "-p",
+          "-t",
+          "herdr-worker",
+          "#{pane_dead}",
+        ],
+        { check: false },
+      ).stdout.trim() === "1"
+    )
+      break;
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
   runSync("bash", ["-c", command]);
   assert.equal(
     fs.readFileSync(path.join(state, "launches"), "utf8"),
@@ -90,7 +108,14 @@ test("real isolated tmux reattaches without duplicate launch and retains agent e
   assert.notEqual(runSync("bash", ["-c", command], { check: false }).status, 0);
   fs.writeFileSync(path.join(state, "resume-approved"), "");
   runSync("bash", ["-c", command]);
-  await new Promise((resolve) => setTimeout(resolve, 100));
+  for (let i = 0; i < 150; i++) {
+    if (
+      fs.readFileSync(path.join(state, "launches"), "utf8") ===
+      "launch\nlaunch\n"
+    )
+      break;
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
   assert.equal(
     fs.readFileSync(path.join(state, "launches"), "utf8"),
     "launch\nlaunch\n",
@@ -238,4 +263,71 @@ test("explicit restart preserves a live agent, resumes a dead one once, and refu
     fs.readFileSync(state + "/launches", "utf8"),
     "launch\nlaunch\n",
   );
+});
+
+test("noninteractive SSH bounds a stalled command without exposing remote output", async (t) => {
+  const { SSH } = await import("../src/ssh.mjs");
+  const { Store } = await import("../src/state.mjs");
+  const { runSync } = await import("../src/process.mjs");
+  const { temporary } = await import("./helpers.mjs");
+  const { randomUUID } = await import("node:crypto");
+  const id = randomUUID(),
+    store = new Store(temporary(t));
+  const ssh = new SSH(
+    store,
+    { sshPrivateKey: "/unused" },
+    {
+      run: (_command, _args, options) =>
+        runSync(
+          process.execPath,
+          [
+            "-e",
+            "setTimeout(()=>{process.stdout.write('private-output')},300)",
+          ],
+          options,
+        ),
+    },
+  );
+  assert.throws(
+    () =>
+      ssh.exec(
+        {
+          id,
+          vm: { serverId: "vm", ip: "192.0.2.1", hostKey: "ssh-ed25519 AAAA" },
+        },
+        "blocked-command",
+        { timeout: 30 },
+      ),
+    (e) =>
+      e.code === "command_timeout" && !e.message.includes("private-output"),
+  );
+});
+test("SSH commands have default deadlines and server-alive probes while interactive sessions remain separate", async (t) => {
+  const { SSH } = await import("../src/ssh.mjs");
+  const { Store } = await import("../src/state.mjs");
+  const { temporary } = await import("./helpers.mjs");
+  const { randomUUID } = await import("node:crypto");
+  let options, args;
+  const ssh = new SSH(
+    new Store(temporary(t)),
+    { sshPrivateKey: "/unused" },
+    {
+      run: (_cmd, a, o) => {
+        args = a;
+        options = o;
+        return { status: 0, stdout: "" };
+      },
+    },
+  );
+  ssh.exec(
+    {
+      id: randomUUID(),
+      vm: { serverId: "vm", ip: "192.0.2.1", hostKey: "ssh-ed25519 AAAA" },
+    },
+    "true",
+  );
+  assert.equal(options.timeout, 300000);
+  assert.equal(options.killSignal, "SIGKILL");
+  assert.ok(args.includes("ServerAliveInterval=15"));
+  assert.ok(args.includes("ServerAliveCountMax=3"));
 });
