@@ -1,0 +1,21 @@
+export const PLUGIN_ID = "vultr.sandbox";
+export const ACTIONS = [
+  "connect-vultr",
+  "check-config",
+  "list",
+  "info",
+  "replace",
+  "forget",
+  "recover",
+  "restart-agent",
+  "start-agent",
+  "reconnect",
+  "login",
+  "pin-host",
+  "status",
+  "stop",
+  "hibernate",
+  "resume",
+  "delete-server",
+  "apply-changes",
+];

@@ -1,0 +1,95 @@
+import fs from "node:fs";
+import path from "node:path";
+
+import { runSync } from "./process.mjs";
+import { PluginError } from "./result.mjs";
+
+export function parsePluginContext(
+  raw = process.env.HERDR_PLUGIN_CONTEXT_JSON,
+) {
+  if (!raw) return {};
+  try {
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      throw new Error("context must be an object");
+    }
+    return parsed;
+  } catch (error) {
+    throw new PluginError(
+      "invalid_herdr_context",
+      `HERDR_PLUGIN_CONTEXT_JSON is invalid: ${error.message}`,
+    );
+  }
+}
+
+export function contextCwd(context, fallback = process.cwd()) {
+  const focused = context.focused_pane_cwd;
+  const checkout = context.worktree?.checkout_path;
+  if (checkout) {
+    if (focused) {
+      const relative = path.relative(
+        path.resolve(checkout),
+        path.resolve(focused),
+      );
+      if (relative !== ".." && !relative.startsWith(`..${path.sep}`)) {
+        return focused;
+      }
+    }
+    if (focused)
+      throw new PluginError(
+        "invalid_worktree_context",
+        "The caller pane is outside the selected checkout; select a worker explicitly.",
+      );
+    return checkout;
+  }
+  return focused ?? context.workspace_cwd ?? fallback;
+}
+
+export function resolveGitContext(context, options = {}) {
+  if (
+    !context.worktree?.checkout_path &&
+    !context.focused_pane_cwd &&
+    !context.workspace_cwd &&
+    !options.cwd
+  ) {
+    throw new PluginError(
+      "missing_worktree_context",
+      "Herdr did not supply a worktree or pane cwd.",
+    );
+  }
+  const requestedCwd = path.resolve(contextCwd(context, options.cwd));
+  const cwd = fs.realpathSync.native(requestedCwd);
+  const rootResult = runSync("git", ["rev-parse", "--show-toplevel"], {
+    cwd,
+    check: false,
+  });
+  if (rootResult.status !== 0) {
+    throw new PluginError(
+      "git_worktree_required",
+      `No Git worktree contains ${cwd}.`,
+    );
+  }
+  const root = fs.realpathSync.native(path.resolve(rootResult.stdout.trim()));
+  if (
+    context.worktree?.checkout_path &&
+    fs.realpathSync.native(context.worktree.checkout_path) !== root
+  ) {
+    throw new PluginError(
+      "invalid_worktree_context",
+      "The focused cwd resolves outside the selected checkout.",
+    );
+  }
+  const relativeCwd = path.relative(root, cwd) || ".";
+  if (relativeCwd === ".." || relativeCwd.startsWith(`..${path.sep}`)) {
+    throw new PluginError(
+      "invalid_worktree_context",
+      `${cwd} is outside ${root}.`,
+    );
+  }
+  return {
+    root,
+    cwd,
+    relativeCwd: relativeCwd.split(path.sep).join("/"),
+    sourcePaneId: context.focused_pane_id ?? process.env.HERDR_PANE_ID ?? null,
+  };
+}

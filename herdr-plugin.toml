@@ -1,0 +1,129 @@
+id = "vultr.sandbox"
+name = "Vultr Sandbox"
+version = "0.1.0"
+min_herdr_version = "0.9.5"
+description = "Dedicated Linux coding workers with reviewed source and snapshot hibernation."
+platforms = ["linux"]
+
+[[build]]
+command = ["npm", "ci", "--omit=dev"]
+
+[[actions]]
+id = "start-agent"
+title = "Start agent in Vultr"
+contexts = ["workspace", "pane"]
+command = ["sh", "-c", 'exec node "$HERDR_PLUGIN_ROOT/src/action.mjs"']
+
+[[actions]]
+id = "reconnect"
+title = "Reconnect to Vultr worker"
+contexts = ["workspace", "pane"]
+command = ["sh", "-c", 'exec node "$HERDR_PLUGIN_ROOT/src/action.mjs"']
+
+[[actions]]
+id = "login"
+title = "Remote coding-agent login"
+contexts = ["workspace", "pane"]
+command = ["sh", "-c", 'exec node "$HERDR_PLUGIN_ROOT/src/action.mjs"']
+
+[[actions]]
+id = "pin-host"
+title = "Pin Vultr SSH identity"
+contexts = ["workspace", "pane"]
+command = ["sh", "-c", 'exec node "$HERDR_PLUGIN_ROOT/src/action.mjs"']
+
+[[actions]]
+id = "status"
+title = "Observe Vultr status"
+contexts = ["workspace", "pane"]
+command = ["sh", "-c", 'exec node "$HERDR_PLUGIN_ROOT/src/action.mjs"']
+
+[[actions]]
+id = "stop"
+title = "Power off Vultr server (still billed)"
+contexts = ["workspace", "pane"]
+command = ["sh", "-c", 'exec node "$HERDR_PLUGIN_ROOT/src/action.mjs"']
+
+[[actions]]
+id = "hibernate"
+title = "Snapshot and release Vultr server"
+contexts = ["workspace", "pane"]
+command = ["sh", "-c", 'exec node "$HERDR_PLUGIN_ROOT/src/action.mjs"']
+
+[[actions]]
+id = "resume"
+title = "Resume Vultr worker"
+contexts = ["workspace", "pane"]
+command = ["sh", "-c", 'exec node "$HERDR_PLUGIN_ROOT/src/action.mjs"']
+
+[[actions]]
+id = "delete-server"
+title = "Permanently delete Vultr server"
+contexts = ["workspace", "pane"]
+command = ["sh", "-c", 'exec node "$HERDR_PLUGIN_ROOT/src/action.mjs"']
+
+[[actions]]
+id = "apply-changes"
+title = "Review Vultr changes locally"
+contexts = ["workspace", "pane"]
+command = ["sh", "-c", 'exec node "$HERDR_PLUGIN_ROOT/src/action.mjs"']
+
+[[actions]]
+id = "connect-vultr"
+title = "Configure Vultr credentials and agent"
+contexts = ["workspace", "pane"]
+command = ["sh", "-c", 'exec node "$HERDR_PLUGIN_ROOT/src/action.mjs"']
+
+[[actions]]
+id = "check-config"
+title = "Verify Vultr configuration (no compute)"
+contexts = ["workspace", "pane"]
+command = ["sh", "-c", 'exec node "$HERDR_PLUGIN_ROOT/src/action.mjs"']
+
+[[actions]]
+id = "list"
+title = "List Vultr workers"
+contexts = ["workspace", "pane"]
+command = ["sh", "-c", 'exec node "$HERDR_PLUGIN_ROOT/src/action.mjs"']
+
+[[actions]]
+id = "info"
+title = "Inspect worker mapping"
+contexts = ["workspace", "pane"]
+command = ["sh", "-c", 'exec node "$HERDR_PLUGIN_ROOT/src/action.mjs"']
+
+[[actions]]
+id = "replace"
+title = "Delete and replace mapped worker"
+contexts = ["workspace", "pane"]
+command = ["sh", "-c", 'exec node "$HERDR_PLUGIN_ROOT/src/action.mjs"']
+
+[[actions]]
+id = "forget"
+title = "Delete server and forget mapping"
+contexts = ["workspace", "pane"]
+command = ["sh", "-c", 'exec node "$HERDR_PLUGIN_ROOT/src/action.mjs"']
+
+[[actions]]
+id = "recover"
+title = "Reconcile retained worker operation"
+contexts = ["workspace", "pane"]
+command = ["sh", "-c", 'exec node "$HERDR_PLUGIN_ROOT/src/action.mjs"']
+
+[[actions]]
+id = "restart-agent"
+title = "Resume an exited remote agent"
+contexts = ["workspace", "pane"]
+command = ["sh", "-c", 'exec node "$HERDR_PLUGIN_ROOT/src/action.mjs"']
+
+[[panes]]
+id = "worker"
+title = "Vultr worker"
+placement = "split"
+command = ["sh", "-c", 'exec node "$HERDR_PLUGIN_ROOT/src/pane.mjs"']
+
+[[panes]]
+id = "onboarding"
+title = "Vultr setup"
+placement = "split"
+command = ["sh", "-c", 'exec node "$HERDR_PLUGIN_ROOT/src/pane.mjs"']
