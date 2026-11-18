@@ -115,6 +115,7 @@ test("fresh worker freezes its adapter and source identity without storing host 
     c,
     f.env,
   );
+  assert.equal(record.guestBackend, "herdr");
   assert.equal(record.agentAdapter.kind, "codex");
   assert.equal(record.agentAdapter.conformance, "pending-live");
   assert.equal(record.vm, null);

@@ -16,6 +16,7 @@ import { Connections } from "./connections.mjs";
 import { serveWorker } from "./control.mjs";
 import { currentPane, reportSession } from "./herdr.mjs";
 import { recordAdapter } from "./adapters.mjs";
+import { guestBackend } from "./guest-herdr.mjs";
 import { workerInfo, replaceWorker, forgetWorker } from "./mappings.mjs";
 import { saveConfiguration, inspectConfiguration } from "./onboarding.mjs";
 import { runSync } from "./process.mjs";
@@ -250,7 +251,9 @@ export async function runWorker({
         transport: { state: "attached", sessionMetadata: false },
       }));
       display(
-        "Attached to the same tmux worker. Ctrl-b d returns here without stopping it. Closing this local pane also leaves compute allocated.",
+        guestBackend(r) === "herdr"
+          ? "Attached to the same native Herdr terminal. Ctrl-b q returns here without stopping it; Ctrl-b Ctrl-b sends literal Ctrl-b. Closing this local pane leaves compute allocated."
+          : "Attached to the legacy tmux worker. Ctrl-b d returns here without stopping it. Closing this local pane leaves compute allocated.",
       );
       let exit, metadata;
       const registration = new AbortController();
@@ -287,6 +290,7 @@ export async function runWorker({
       }
       await store.update(id, (v) => ({
         ...v,
+        ...(session.backend === "herdr" ? { guestHerdr: session } : {}),
         transport: {
           state: session.status,
           exit: exit ?? null,

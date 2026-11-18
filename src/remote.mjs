@@ -6,6 +6,7 @@ import { shellQuote as q } from "./process.mjs";
 import { readSnapshot, readRegular, saveSnapshot } from "./manifest.mjs";
 import { remotePaths, tmuxCommand } from "./ssh.mjs";
 import { PluginError } from "./result.mjs";
+import { guestBackend, guestInstallCommand } from "./guest-herdr.mjs";
 import { recordAdapter } from "./adapters.mjs";
 import { setTimeout as delay } from "node:timers/promises";
 const directory = fileURLToPath(new URL(".", import.meta.url));
@@ -15,6 +16,23 @@ export class Remote {
   }
   command(r, command, options) {
     return this.ssh.exec(r, command, options);
+  }
+  guestCommand(r, operation) {
+    const { source, state } = remotePaths(r);
+    return [
+      ...(operation === "attach"
+        ? []
+        : ["flock", q(state + "/herdr-worker.lock")]),
+      "node",
+      q(state + "/tools/guest-herdr.mjs"),
+      q(operation),
+      q(state),
+      q(r.id),
+      q(source),
+    ].join(" ");
+  }
+  guest(r, operation) {
+    return JSON.parse(this.command(r, this.guestCommand(r, operation)).stdout);
   }
   transfer(r, mode, temporary, input) {
     const { source, state } = remotePaths(r);
@@ -50,6 +68,7 @@ export class Remote {
     // These modules contain only public source and no configuration/credentials.
     for (const name of [
       "remote-transfer",
+      "guest-herdr",
       "manifest",
       "process",
       "result",
@@ -63,6 +82,8 @@ export class Remote {
         input: bytes,
       });
     }
+    if (guestBackend(r) === "herdr")
+      this.command(r, guestInstallCommand(state));
     for (const name of ["LICENSE", "THIRD_PARTY_NOTICES.md"])
       this.command(r, `cat > ${q(state + "/tools/" + name)}`, {
         input: fs.readFileSync(new URL("../" + name, import.meta.url)),
@@ -161,6 +182,7 @@ export class Remote {
     );
   }
   async checkpoint(r) {
+    if (guestBackend(r) === "herdr") this.guest(r, "checkpoint");
     const { source, state } = remotePaths(r);
     this.command(
       r,
@@ -188,6 +210,12 @@ export class Remote {
     return checkpoint;
   }
   async quiesce(r) {
+    if (guestBackend(r) === "herdr") {
+      this.command(r, `set -eu\n${r.config.adapter.quiesce || ":"}`);
+      this.guest(r, "quiesce");
+      this.command(r, "sync");
+      return;
+    }
     const { state } = remotePaths(r),
       session = `herdr-${r.id}`;
     this.command(
@@ -256,10 +284,16 @@ export class Remote {
     }
     return { status: "authenticated", verified: true };
   }
-  ensureWorker(r) {
+  ensureWorker(r, { resumeApproved = false } = {}) {
+    if (guestBackend(r) === "herdr")
+      return this.guest(r, resumeApproved ? "resume" : "ensure");
     return this.command(r, tmuxCommand(r));
   }
   attach(r) {
+    if (guestBackend(r) === "herdr")
+      return this.ssh.interactive(r, this.guestCommand(r, "attach"), {
+        agentKind: recordAdapter(r).capabilities.herdrDetectionKind,
+      });
     return this.ssh.interactive(
       r,
       `test "$(tmux display-message -p -t ${q("herdr-" + r.id)} '#{pane_dead}')" = 0 && exec tmux attach-session -t ${q("herdr-" + r.id)}`,
@@ -270,6 +304,7 @@ export class Remote {
     return this.ssh.interactive(r, recordAdapter(r).login);
   }
   inspectSession(r) {
+    if (guestBackend(r) === "herdr") return this.guest(r, "inspect");
     const result = this.command(
       r,
       `tmux display-message -p -t ${q("herdr-" + r.id)} '#{pane_id} #{pane_pid} #{pane_dead} #{pane_dead_status}'`,
@@ -285,6 +320,7 @@ export class Remote {
     };
   }
   restartAgent(r) {
+    if (guestBackend(r) === "herdr") return this.guest(r, "restart");
     // respawn-pane without -k refuses to replace a running agent, including a race.
     const session = q("herdr-" + r.id),
       { state } = remotePaths(r);

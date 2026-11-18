@@ -3,6 +3,13 @@
 Accepted for the candidate Linux implementation, 2026-11-18. Live provider and
 remote-agent conformance remain pending.
 
+Subsequent authorized live evidence leaves a specific provider gate open:
+guest-only graceful shutdown did not produce provider OFF. Separately authorized
+exact provider Stop (`/halt`) reconciliations were required. Native guest Herdr
+does not correct that behavior, and this transport decision adds no automatic
+provider fallback or mutation retry. Full lifecycle conformance must not be
+inferred from guest transport, authentication or allocated-resume proofs.
+
 ## Decision and evidence
 
 Use one dedicated Vultr Cloud Compute instance per logical worker. Keep worker
@@ -136,8 +143,17 @@ dedicated guest and root account; no multi-tenant security claim is made.
 Reject TOFU/disabled host checking, borrowed host agent auth, Hetzner-shaped API
 emulation, forced-shutdown hibernation, blind POST retries, silent rebuild,
 automatic snapshot deletion, and focused-pane inference. Keep a persistent local
-dashboard separate from SSH/agent/compute lifetimes. Dead tmux panes remain
-observable and explicit restart refuses a live pane. Local fake-provider tests,
+dashboard separate from SSH/agent/compute lifetimes. New logical workers use pinned stock guest Herdr 0.9.5 and persist actual
+workspace/pane/terminal IDs and detected agent observations. Missing backend
+markers select legacy tmux recovery without migration. Dead workers remain
+observable and explicit restart refuses a live process. The guest helper clears
+inherited HERDR variables, sets HERDR_SESSION and the exact short worker socket,
+and never passes --session (which overrides that socket in 0.9.5). Private durable
+XDG state/config/cache/runtime live under the worker state directory. Native
+restoration has resume_agents_on_restore=false; server startup never grants
+agent continuation permission. Existing identity/source/auth/service gates
+produce one-use continuation approval, consumed even when the agent is already
+live. Server loss retains a durable Resume requirement. Local fake-provider tests,
 real tmux checks, actual isolated Herdr contracts and package smoke support only
 the claims in the capability matrix. Production deployment and live conformance
 need a separately authorized owner trial.

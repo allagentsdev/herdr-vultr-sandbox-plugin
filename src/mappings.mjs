@@ -68,6 +68,7 @@ export async function newWorker(
     vm: null,
     snapshot: null,
     pending: null,
+    guestBackend: "herdr",
     agentAdapter: structuredClone(adapter),
     config: { ...structuredClone(config), adapter: adapterCommands(adapter) },
   });
@@ -146,6 +147,8 @@ export function workerInfo(r) {
     previousServerId: r.previousVm?.serverId ?? null,
     snapshotId: r.snapshot?.imageId ?? null,
     previousSnapshotId: r.snapshot?.previousImageId ?? null,
+    guestBackend: r.guestBackend ?? "tmux",
+    guestHerdr: r.guestHerdr ?? null,
     agentKind: a.kind,
     expectedVersion: a.version ?? null,
     installedVersion: r.agentRuntime?.installedVersion ?? null,

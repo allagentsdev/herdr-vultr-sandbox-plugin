@@ -228,3 +228,71 @@ test("repeated exports and restore checks remove transient copies while checkpoi
   );
   assert.ok(fs.existsSync(path.join(target, "files/source")));
 });
+
+test("native records use the owned helper and preserve the exact native observation; unmarked records keep tmux", () => {
+  const commands = [],
+    interactions = [],
+    observation = {
+      backend: "herdr",
+      status: "detached",
+      workspaceId: "observed-workspace",
+      paneId: "observed-pane",
+      terminalId: "observed-terminal",
+      pid: 991,
+      observedAt: "2026-11-18T00:00:00.000Z",
+      agent: { agent: "codex", agent_status: "unknown" },
+    };
+  const remote = new Remote({
+    exec(r, command) {
+      commands.push(command);
+      return { status: 0, stdout: JSON.stringify(observation) };
+    },
+    interactive(r, command) {
+      interactions.push(command);
+      return { code: 0 };
+    },
+  });
+  const record = {
+    id: "worker",
+    guestBackend: "herdr",
+    config: validateConfig({}),
+  };
+  assert.deepEqual(remote.ensureWorker(record), observation);
+  assert.deepEqual(remote.inspectSession(record), observation);
+  assert.deepEqual(
+    remote.ensureWorker(record, { resumeApproved: true }),
+    observation,
+  );
+  assert.match(commands.at(-1), /'resume'/);
+  remote.attach(record);
+  remote.restartAgent(record);
+  assert.ok(commands.every((s) => s.includes("guest-herdr.mjs")));
+  assert.ok(interactions[0].includes("'attach'"));
+  assert.ok(!commands.join(" ").includes("tmux"));
+  delete record.guestBackend;
+  remote.ensureWorker(record);
+  assert.match(commands.at(-1), /tmux has-session/);
+});
+
+test("native checkpoint refuses a live-writer rejection before capturing source", async () => {
+  let captured = 0;
+  const remote = new Remote({
+    exec(record, command) {
+      if (command.includes("guest-herdr.mjs")) throw Error("guest_writer_live");
+      if (command.includes("remote-transfer.mjs")) {
+        captured++;
+        return { status: 0, stdout: JSON.stringify({ digest: "captured" }) };
+      }
+      return { status: 0, stdout: "" };
+    },
+  });
+  await assert.rejects(
+    remote.checkpoint({
+      id: "worker",
+      guestBackend: "herdr",
+      config: validateConfig({}),
+    }),
+    /guest_writer_live/,
+  );
+  assert.equal(captured, 0);
+});

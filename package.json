@@ -15,6 +15,7 @@
     "lint": "eslint .",
     "verify:manifest": "node scripts/verify-manifest.mjs",
     "test": "node --test test/*.test.mjs",
+    "test:guest-herdr": "node scripts/test-guest-herdr.mjs && node --test scripts/test-guest-herdr-recovery.mjs",
     "test:herdr": "node scripts/test-herdr-integration.mjs",
     "test:codex-bootstrap": "node scripts/test-codex-bootstrap.mjs",
     "test:synthetic": "npm test && npm run test:herdr",

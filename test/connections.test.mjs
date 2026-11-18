@@ -214,3 +214,72 @@ test("explicit restart shares the worker lock with hibernation until the new age
   await hibernate;
   assert.ok(f.events.indexOf("restart") < f.events.indexOf("quiesce"));
 });
+
+test("native observations persist exact remote IDs and actual unknown agent state without claiming readiness", async (t) => {
+  const f = await fixture(t);
+  const observation = {
+    backend: "herdr",
+    status: "detached",
+    workspaceId: "native-workspace",
+    paneId: "native-pane",
+    terminalId: "native-terminal",
+    pid: 947,
+    observedAt: "2026-11-18T00:00:00.000Z",
+    agent: { agent: "codex", agent_status: "unknown" },
+  };
+  await f.store.update(f.id, (r) => ({ ...r, guestBackend: "herdr" }));
+  f.remote.ensureWorker = async () => observation;
+  const record = await f.connections.prepare(f.id, "reconnect");
+  assert.deepEqual(record.guestHerdr, observation);
+  assert.deepEqual(f.store.get(f.id).guestHerdr, observation);
+  assert.deepEqual(f.events, ["auth"]);
+});
+
+test("lost native launch acknowledgement preserves restore readiness without inventing success", async (t) => {
+  const f = await fixture(t);
+  await f.store.update(f.id, (r) => ({
+    ...r,
+    guestBackend: "herdr",
+    phase: "restore-verification",
+    snapshot: { imageId: 7 },
+  }));
+  let sourceChanged = false,
+    verified = 0;
+  f.remote.verifyResume = async () => {
+    assert.equal(
+      sourceChanged,
+      false,
+      "snapshot verification must precede the initial launch",
+    );
+    verified++;
+  };
+  f.remote.ensureWorker = async (record, { resumeApproved }) => {
+    assert.equal(f.store.get(f.id).phase, "ready");
+    assert.equal(resumeApproved, true);
+    sourceChanged = true;
+    throw Error("launch acknowledgement lost");
+  };
+  await assert.rejects(
+    f.connections.prepare(f.id, "reconnect"),
+    /launch acknowledgement lost/,
+  );
+  assert.equal(f.store.get(f.id).phase, "ready");
+  assert.equal(f.store.get(f.id).guestHerdr, undefined);
+  const observed = {
+    backend: "herdr",
+    status: "detached",
+    terminalId: "existing",
+    observedAt: "2026-11-18T00:00:00.000Z",
+  };
+  f.remote.ensureWorker = async (record, { resumeApproved }) => {
+    assert.equal(
+      resumeApproved,
+      false,
+      "reconnect must not replay prior launch authorization",
+    );
+    return observed;
+  };
+  const next = await f.connections.prepare(f.id, "reconnect");
+  assert.equal(verified, 1);
+  assert.deepEqual(next.guestHerdr, observed);
+});

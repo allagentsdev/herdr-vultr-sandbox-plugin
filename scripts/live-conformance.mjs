@@ -4,6 +4,9 @@ import { readPrivate } from "../src/config.mjs";
 import { Cloud, resourceId } from "../src/provider.mjs";
 import { Lifecycle } from "../src/lifecycle.mjs";
 import { SSH, remotePaths } from "../src/ssh.mjs";
+import { Remote } from "../src/remote.mjs";
+import { guestBackend } from "../src/guest-herdr.mjs";
+import { shellQuote as q } from "../src/process.mjs";
 import { emitFailure } from "../src/result.mjs";
 const { values } = parseArgs({
   options: {
@@ -40,10 +43,10 @@ try {
   const ssh = new SSH(store, r.config),
     { source, state } = remotePaths(r);
   // Remote output is intentionally discarded; it could include agent credentials.
-  ssh.exec(
-    r,
-    `test -d '${source}' && test -s '${state}/identity.json' && tmux has-session -t 'herdr-${r.id}'`,
-  );
+  ssh.exec(r, `test -d ${q(source)} && test -s ${q(state + "/identity.json")}`);
+  const session = new Remote(ssh).inspectSession(r);
+  if (session.status !== "detached")
+    throw Error("Remote agent is not observed running; nothing was started.");
   if (values.snapshot) {
     const image = await api.getImage(resourceId(values.snapshot));
     life.usable(image, r);
@@ -57,7 +60,8 @@ try {
       providerStatus: status.providerStatus,
       sshPinned: true,
       sourcePresent: true,
-      tmuxPresent: true,
+      guestBackend: guestBackend(r),
+      remoteSession: session,
     }),
   );
 } catch (e) {

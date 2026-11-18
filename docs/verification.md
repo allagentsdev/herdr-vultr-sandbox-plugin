@@ -8,6 +8,7 @@ Git. Run from this checkout:
 npm ci
 npm run check
 VULTR_HERDR_TEST_BIN=/absolute/official/herdr npm run test:herdr
+VULTR_HERDR_TEST_BIN=/absolute/official/herdr npm run test:guest-herdr
 npm run test:package
 ```
 
@@ -48,10 +49,10 @@ VULTR_CODEX_TEST_BIN=/absolute/native/codex-0.169.0 npm run test:codex-bootstrap
 No host launcher, private profile or host account directory is used. This proves
 public plugin installation and modern profile parsing locally, not remote login.
 
-## Opt-in live observations — pending
+## Opt-in live observations
 
-No live run is authorized by this implementation task. After separate explicit
-owner authorization, an existing worker can be observed without resource mutation:
+The read-only entrypoint requires separate explicit owner authorization. An
+existing worker can then be observed without resource mutation:
 
 ```sh
 npm run test:live -- --allow-live-conformance --dedicated-account \
@@ -60,7 +61,8 @@ npm run test:live -- --allow-live-conformance --dedicated-account \
 
 Supply `--snapshot EXACT_SNAPSHOT_ID` only to inspect the worker's already saved
 snapshot. The script checks exact durable IDs before reading the token, observes
-provider ownership/power, performs strict pinned SSH source/identity/tmux checks,
+provider ownership/power, performs strict pinned SSH source/identity checks and
+observes the selected native Herdr or legacy tmux backend,
 and discards remote output. It never starts, halts, rebuilds, creates or deletes
 resources. Successful output is a limited observation, not full lifecycle or
 authenticated-agent conformance. The broader trial checklist is in the capability
@@ -70,5 +72,55 @@ Private logs for this implementation are retained outside Git. The generated hos
 official Canonical cloud-init 25.3 schema. Temporary private key data was deleted
 and never logged. The PR records
 check counts, official binary version/hash, production package smoke and the
-actual independent review receipt. Live Vultr and authenticated coding-agent
-conformance remain explicitly pending.
+actual independent review receipt. A later owner-authorized live trial verified
+the merged legacy worker's source/bootstrap, independent Codex authentication,
+patch application, allocated resume and conversation/checkpoint persistence.
+Separate actual guest Herdr/Codex and helper process proofs do not establish the
+complete fresh-worker native Herdr lifecycle or snapshot restore. The exact
+reviewed recovery image completed, and normal exact-target release removed the
+disposable instance while retaining that authenticated image. Provider inventory
+confirmed no residual instance, block or reserved IP. Snapshot restore remains
+untested.
+
+## Live provider Stop gate
+
+In the authorized 2026-11-18 trial of merged commit
+`371d4905c422f481847f9f661f99769062ea7b98`, normal Stop quiesced and checkpointed
+the worker and acknowledged guest shutdown. SSH became unavailable, but fresh
+provider reads still reported running. Provider stopped power required a
+separately authorized exact-target `/halt`, which
+[Vultr documents as provider Stop](https://docs.vultr.com/products/compute/instances/cloud-compute/management/stop-instance).
+Those reconciliation receipts are distinct from plugin success. Snapshot locking
+can subsequently produce `power_status=stopped` with `server_status=locked`;
+complete/usable image and fresh stopped/unlocked observations are separate gates.
+
+The guest transport implementation leaves provider policy unchanged. Do not
+claim full lifecycle success or infer that native Herdr fixes guest-only Stop.
+A production correction still needs review of checkpoint/quiesce ordering,
+durable submission/acknowledgement and unknown-outcome/no-retry behavior. Private
+raw live receipts, exact IDs and cleanup decisions remain outside the repository.
+
+`test:guest-herdr` also requires Python 3 for its controlling-PTY driver. It starts
+only owned isolated stock Herdr servers through the
+deployable guest helper. It checks a full worker UUID with an explicit short
+socket, real workspace/pane/terminal/process IDs, native prompt/wait, repeated
+reconnect without relaunch, real PTY manual detach and live reconnect, actual
+child exit returning the real worker dashboard while retaining its native terminal,
+refusal to restart a live process, explicit dead restart, and restoration with
+automatic agent launch disabled. Its agent is the
+repository's explicitly synthetic transport fixture with a detection hint; no
+host authentication is used. Raw sanitized helper receipts and server logs remain
+in the printed temporary proof directory. Fresh-worker marker and unmarked
+legacy behavior are separately checked by mappings/remote/SSH tests.
+
+The native recovery proof additionally consumes failed Resume authorization before
+setup, rejects stale authorization on ordinary Reconnect, and checks an actual
+synthetic writer that inherits the lifetime lease and survives an unexpected
+owned server SIGKILL. With the stale socket removed, quiesce, checkpoint and
+explicitly approved continuation must reject while that writer still modifies
+source; after its actual exit, checkpoint and a newly approved continuation
+succeed. This differs from graceful server termination, which killed the child
+in the characterization. Unavailable and missing-pane observations clear current
+process fields and carry a fresh observation time. The existing restore-readiness
+contract remains durable before launch, including when launch acknowledgement is
+lost; readiness records completed gates rather than observed agent activity.
