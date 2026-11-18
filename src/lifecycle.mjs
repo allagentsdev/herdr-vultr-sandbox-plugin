@@ -52,6 +52,21 @@ export class Lifecycle {
           "operation_pending",
           "Finish the retained operation before disabling expiry.",
         );
+      if (
+        r.hibernate &&
+        (!manualStopMatches(r) ||
+          !r.hibernate.manualStop.operation ||
+          !Number.isFinite(Date.parse(r.hibernate.manualStop.completedAt)))
+      )
+        fail(
+          "operation_pending",
+          "Only a completed manual Stop can be retired while disabling expiry.",
+        );
+      if (r.hibernate && (await this.owned(r))?.powerState !== "off")
+        fail(
+          "operation_pending",
+          "Confirm the owned instance is stopped before disabling expiry.",
+        );
       return this.store.update(id, (v) => ({
         ...v,
         expiry: null,
@@ -273,9 +288,24 @@ export class Lifecycle {
     };
   }
   async receipt(id, kind, extra = {}) {
+    const operation = randomUUID();
     return this.store.update(id, (r) => ({
       ...r,
-      pending: { kind, operation: randomUUID(), attempted: false, ...extra },
+      pending: { kind, operation, attempted: false, ...extra },
+      ...(kind === "shutdown" &&
+      extra.providerOperation === "halt" &&
+      manualStopMatches(r)
+        ? {
+            hibernate: {
+              ...r.hibernate,
+              manualStop: {
+                ...r.hibernate.manualStop,
+                operation,
+                completedAt: null,
+              },
+            },
+          }
+        : {}),
     }));
   }
   async attempted(id) {
@@ -478,8 +508,7 @@ export class Lifecycle {
         r = await this.store.update(id, (v) => ({ ...v, hibernate: null }));
     }
     const status = kind === "shutdown" ? "off" : "running";
-    if (s.powerState === status)
-      return this.store.update(id, (v) => ({ ...v, pending: null }));
+    if (s.powerState === status) return this.settlePowerLocked(id);
     if (!r.pending) {
       if (kind === "shutdown" && r.hibernate?.stage !== "shutdown") {
         if (r.hibernate)
@@ -491,7 +520,13 @@ export class Lifecycle {
           ...v,
           powerCheckpoint: checkpoint,
           ...(v.expiry?.approvedAt
-            ? { hibernate: { checkpoint, stage: "shutdown" } }
+            ? {
+                hibernate: {
+                  checkpoint,
+                  stage: "shutdown",
+                  manualStop: { serverId: v.vm.serverId, checkpoint },
+                },
+              }
             : {}),
         }));
       }
@@ -517,8 +552,7 @@ export class Lifecycle {
         );
       s = await this.owned(r);
       if (!s) fail("server_missing", "No allocated instance.");
-      if (s.powerState === status)
-        return this.store.update(id, (v) => ({ ...v, pending: null }));
+      if (s.powerState === status) return this.settlePowerLocked(id);
       if (kind === "poweron" && s.powerState !== "off")
         fail(
           "status_pending",
@@ -536,14 +570,45 @@ export class Lifecycle {
       }));
     }
     await this.api.waitStatus(s.id, status);
-    return this.store.update(id, (v) => ({ ...v, pending: null }));
+    return this.settlePowerLocked(id);
+  }
+  async settlePowerLocked(id) {
+    return this.store.update(id, (r) => {
+      const stop = r.hibernate?.manualStop;
+      const completing = stop && r.pending?.kind === "shutdown";
+      if (
+        completing &&
+        (!manualStopMatches(r) ||
+          r.pending.providerOperation !== "halt" ||
+          r.pending.serverId !== stop.serverId ||
+          r.pending.operation !== stop.operation)
+      )
+        fail("operation_pending", "Manual Stop receipt and checkpoint differ.");
+      return {
+        ...r,
+        pending: null,
+        ...(completing
+          ? {
+              hibernate: {
+                ...r.hibernate,
+                manualStop: { ...stop, completedAt: new Date().toISOString() },
+              },
+            }
+          : {}),
+      };
+    });
   }
   async hibernate(id) {
     return this.store.withLock(id, () => this.hibernateLocked(id));
   }
   async hibernateLocked(id) {
-    let r = this.store.get(id),
-      s = await this.owned(r);
+    let r = this.store.get(id);
+    if (r.hibernate?.manualStop)
+      r = await this.store.update(id, (v) => ({
+        ...v,
+        hibernate: { ...v.hibernate, manualStop: null },
+      }));
+    const s = await this.owned(r);
     if (!s && r.hibernate?.stage !== "release")
       fail("server_missing", "No allocated instance.");
     if (!r.hibernate) {
@@ -797,4 +862,14 @@ function idleObservation(session, activity, minutes, now) {
         ).toISOString()
       : null,
   };
+}
+
+function manualStopMatches(r) {
+  const stop = r.hibernate?.manualStop;
+  return (
+    r.hibernate?.stage === "shutdown" &&
+    stop?.serverId === r.vm?.serverId &&
+    stop?.checkpoint &&
+    JSON.stringify(stop.checkpoint) === JSON.stringify(r.hibernate.checkpoint)
+  );
 }

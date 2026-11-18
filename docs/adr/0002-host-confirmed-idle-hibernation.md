@@ -50,8 +50,16 @@ the same current quiescent checkpoint and clone preparation before Halt, allowin
 later release of the OFF instance without powering it on. Disabled-policy Stop
 keeps its existing behavior. Resume retires old Hibernate authority before any
 power-on or already-running settlement, including failed restart-hook writers.
-After Stop has no pending receipt, exact-worker Disable can revoke recurring
-release and retire its shutdown-stage Hibernate authority in one durable update.
+Completed manual Stop retains a durable intent bound to its exact instance,
+checkpoint and power receipt; completion is recorded atomically with clearing the
+pending receipt after provider OFF. After no pending receipt remains, exact-worker
+Disable additionally requires fresh owned provider OFF before revoking recurring
+release and retiring that manual Stop authority in one durable update. A rejected
+Halt, interrupted Hibernate or legacy unmarked shutdown stage cannot establish
+manual Stop completion. Hibernate takeover durably retires manual Stop authority
+before continuing, including before provider observations. Running, transitioning,
+missing or unconfirmed observations retain policy and recovery. Disable without
+Hibernate authority does not read the provider.
 The latest checkpoint remains as `powerCheckpoint` for observation, without
 authorizing release; the stopped instance and previous snapshot remain unchanged.
 Pending receipts and snapshot, release or unknown Hibernate stages still block
