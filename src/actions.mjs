@@ -1,3 +1,4 @@
+import path from "node:path";
 import { ACTIONS } from "./constants.mjs";
 import { loadConfig, readPrivate } from "./config.mjs";
 import { parsePluginContext, resolveGitContext } from "./context.mjs";
@@ -17,6 +18,11 @@ import { PluginError } from "./result.mjs";
 export async function runAction(action, { worker } = {}, options = {}) {
   if (!ACTIONS.includes(action))
     throw new PluginError("unknown_action", "Unknown plugin action.");
+  if (action === "new-worker" && worker !== undefined)
+    throw new PluginError(
+      "invalid_action_options",
+      "New worker cannot select an existing worker. Use Start or Reconnect with --worker to retry it.",
+    );
   const env = options.env ?? process.env,
     context =
       options.context ?? parsePluginContext(env.HERDR_PLUGIN_CONTEXT_JSON);
@@ -50,7 +56,7 @@ export async function runAction(action, { worker } = {}, options = {}) {
       processEnv: env,
       env: {
         HERDR_AGENT: "",
-        VULTR_ACTION: action,
+        VULTR_ACTION: entrypoint === "onboarding" ? "connect-vultr" : action,
         VULTR_WORKER: id,
         VULTR_SOURCE_CONTEXT: JSON.stringify(context),
       },
@@ -69,28 +75,39 @@ export async function runAction(action, { worker } = {}, options = {}) {
     return { status: "opened", workerId: id || null, paneId };
   };
   if (action === "connect-vultr") return openUI("onboarding");
-  let record = selectWorker(store, context, env, worker);
-  if (action === "start-agent" && !record) {
+  let record =
+    action === "new-worker" ? null : selectWorker(store, context, env, worker);
+  if (action === "new-worker" || (action === "start-agent" && !record)) {
     const git = resolveGitContext(context);
-    const existing = workersInScope(store, context, env).filter(
-      (r) =>
-        r.phase !== "replaced" &&
-        (r.localRoot === git.root ||
-          r.sourcePaneId === pane ||
-          r.workerPane?.paneId === pane),
-    );
+    const existing =
+      action === "new-worker"
+        ? []
+        : workersInScope(store, context, env).filter(
+            (r) =>
+              r.phase !== "replaced" &&
+              (r.localRoot === git.root ||
+                r.sourcePaneId === pane ||
+                r.workerPane?.paneId === pane),
+          );
     if (existing.length)
       return {
         status: "selection_required",
         workers: existing.map(workerInfo),
       };
-    record = await newWorker(
-      store,
-      git,
-      context,
-      (options.loadConfig ?? loadConfig)(env),
-      env,
-    );
+    let config;
+    try {
+      config = (options.loadConfig ?? loadConfig)(env);
+    } catch (error) {
+      if (
+        error.code === "ENOENT" &&
+        env.HERDR_PLUGIN_CONFIG_DIR &&
+        path.isAbsolute(env.HERDR_PLUGIN_CONFIG_DIR) &&
+        error.path === path.join(env.HERDR_PLUGIN_CONFIG_DIR, "config.json")
+      )
+        return openUI("onboarding");
+      throw error;
+    }
+    record = await newWorker(store, git, context, config, env);
   }
   if (["info", "status"].includes(action)) {
     if (!record)

@@ -32,6 +32,29 @@ onboarding, persistent dashboard and IPC reconnect, then stops its owned server.
 The agent UI and SSH/provider endpoint are synthetic. The current host active
 session and global installation are not test targets.
 
+Creation tests exercise explicit `new-worker` and normal positional CLI/manifest
+dispatch. They retain ready worker A while creating provisional B with a distinct
+UUID, home, artifacts and upload destination. Both provisional workers reach the
+original exact digest review without provider submission. Tests also cover
+source ambiguity, explicit retries, direct dashboard authority, unknown pane-open
+outcomes, and missing-config setup routing with separate malformed, invalid,
+required-field, private-file and missing SSH-key failures. Injected pane receipts
+and provider services in Node tests are synthetic; they do not establish installed
+Herdr caller context or live provider behavior.
+
+The installed harness invokes Start and New worker through a genuine caller pane
+on its owned server, then correlates the new action log and `VULTR_RESULT`.
+It selects the owned source workspace, verifies the focused pane/cwd and actual
+action context, and restores the previous workspace/focus after dispatch.
+First Start reaches setup with no mapping. Malformed JSON and missing dummy SSH
+key stay typed failures. Two independent workers remain at exact upload review;
+the harness never types approval. Harmless placeholder credentials live outside
+the synthetic Git source. A Node preload rejects and records unexpected fetches
+without supplying provider results, and the harness verifies both installed Node
+entrypoints inherited it. Installed worker/pane/source/home/digest receipts print
+with the result for the caller to retain. This proves no provider request before
+approval within that isolated fixture, without authenticating or allocating.
+
 `test:package` packs to a temporary directory outside the repo, extracts the
 package, runs production `npm install --omit=dev --ignore-scripts` (npm archives omit package-lock.json), then invokes the
 absolute action entrypoint from an unrelated cwd and an isolated empty state.

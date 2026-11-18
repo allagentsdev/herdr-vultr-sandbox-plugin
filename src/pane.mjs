@@ -330,6 +330,7 @@ export async function runWorker({
         await recordRequest(controlRequestId, action, "running");
       try {
         switch (action) {
+          case "new-worker":
           case "start-agent": {
             if (r.vm?.initialized && r.uploadApproval) {
               r = await connections.prepare(id, "reconnect");

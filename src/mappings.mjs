@@ -98,11 +98,12 @@ export function selectWorker(store, context = {}, env = process.env, explicit) {
   }
   const pane = context.focused_pane_id ?? env.HERDR_PANE_ID,
     records = workersInScope(store, context, env);
-  const direct = records.filter(
-    (r) => r.workerPane?.paneId === pane || r.sourcePaneId === pane,
-  );
-  if (direct.length === 1) return direct[0];
-  if (direct.length > 1) return null;
+  const dashboards = records.filter((r) => r.workerPane?.paneId === pane);
+  if (dashboards.length === 1) return dashboards[0];
+  if (dashboards.length > 1) return null;
+  const sources = records.filter((r) => r.sourcePaneId === pane);
+  if (sources.length === 1) return sources[0];
+  if (sources.length > 1) return null;
   let root;
   try {
     root = resolveGitContext(context).root;

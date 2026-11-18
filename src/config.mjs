@@ -187,15 +187,33 @@ export function loadConfig(env = process.env) {
       "config_required",
       "HERDR_PLUGIN_CONFIG_DIR must be absolute. Create config.json there (see README).",
     );
-  const c = validateConfig(
-    JSON.parse(readPrivate(path.join(dir, "config.json"))),
-  );
+  let raw;
+  try {
+    raw = JSON.parse(readPrivate(path.join(dir, "config.json")));
+  } catch (error) {
+    if (error instanceof SyntaxError)
+      throw new PluginError(
+        "invalid_config",
+        "Host-private config.json must contain valid JSON.",
+      );
+    throw error;
+  }
+  const c = validateConfig(raw);
   for (const k of ["tokenFile", "sshPrivateKey", "sshPublicKey"])
     if (!c[k])
       throw new PluginError(
         "config_required",
         `Configure ${k} in host-private config.json.`,
       );
-  assertPrivateFile(c.sshPrivateKey);
+  try {
+    assertPrivateFile(c.sshPrivateKey);
+  } catch (error) {
+    if (error.code === "ENOENT")
+      throw new PluginError(
+        "credential_file_missing",
+        "The configured client SSH private key file is missing.",
+      );
+    throw error;
+  }
   return c;
 }

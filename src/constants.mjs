@@ -9,6 +9,7 @@ export const ACTIONS = [
   "recover",
   "restart-agent",
   "start-agent",
+  "new-worker",
   "reconnect",
   "login",
   "pin-host",

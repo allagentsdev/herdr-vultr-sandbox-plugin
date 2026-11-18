@@ -30,6 +30,28 @@ Object.assign(env, {
 fs.mkdirSync(root + "/config/herdr", { recursive: true });
 fs.mkdirSync(root + "/runtime");
 fs.writeFileSync(root + "/config/herdr/config.toml", "onboarding = false\n");
+const networkLog = path.join(root, "node-network-guard.jsonl"),
+  networkGuard = path.join(root, "node-network-guard.mjs");
+fs.writeFileSync(
+  networkGuard,
+  `import fs from "node:fs";
+const file = ${JSON.stringify(networkLog)};
+const context = JSON.parse(process.env.HERDR_PLUGIN_CONTEXT_JSON ?? "{}");
+fs.appendFileSync(file, JSON.stringify({
+  entrypoint: process.argv[1], pid: process.pid,
+  action: process.env.HERDR_PLUGIN_ACTION_ID,
+  callerPaneId: context.focused_pane_id,
+  workspaceId: context.workspace_id,
+  callerCwd: context.focused_pane_cwd,
+}) + "\\n");
+globalThis.fetch = async () => {
+  fs.appendFileSync(file, JSON.stringify({ unexpectedFetch: true, pid: process.pid }) + "\\n");
+  throw new Error("Installed fixture forbids external provider requests");
+};
+`,
+  { mode: 0o600 },
+);
+env.NODE_OPTIONS = `--import=${networkGuard}`;
 const log = fs.openSync(root + "/server.log", "w", 0o600),
   server = spawn(binary, ["--session", session, "server"], {
     cwd: root,
@@ -164,49 +186,276 @@ try {
   // Link only into this owned server/config; this never updates the active installation.
   const pluginRoot = fileURLToPath(new URL("../", import.meta.url));
   cli(["plugin", "link", pluginRoot]);
-  const { runAction } = await import("../src/actions.mjs");
-  const { openPluginPane } = await import("../src/herdr.mjs");
-  let opened;
-  const openedReceipt = await runAction(
-    "connect-vultr",
-    {},
-    {
-      env: {
-        ...env,
-        HERDR_BIN_PATH: binary,
-        HERDR_PLUGIN_STATE_DIR: root + "/action-state",
-        HERDR_AGENT: "codex",
-      },
-      context: { focused_pane_id: pane, workspace_cwd: root },
-      openPane: (...args) => {
-        opened = openPluginPane(...args);
-        return opened;
-      },
-    },
+  const source = path.join(root, "creation-source");
+  fs.mkdirSync(source);
+  assert.equal(spawnSync("git", ["init", "-q", source]).status, 0);
+  fs.writeFileSync(
+    path.join(source, "source.txt"),
+    "harmless reviewed fixture\n",
   );
-  const setupPane = JSON.parse(opened.stdout).result.plugin_pane.pane.pane_id;
-  assert.equal(openedReceipt.paneId, setupPane);
+  const creationWorkspace = cli([
+      "workspace",
+      "create",
+      "--cwd",
+      source,
+      "--no-focus",
+    ]).json.result,
+    sourcePane = creationWorkspace.root_pane.pane_id;
+  const actionLogs = () =>
+    cli(["plugin", "log", "list", "--plugin", "vultr.sandbox", "--limit", "20"])
+      .json.result.logs;
+  const guardRecords = () =>
+    fs
+      .readFileSync(networkLog, "utf8")
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line));
+  const panes = () => cli(["pane", "list"]).json.result.panes;
+  const installedActionContexts = [];
+  const shellIdle = (paneId) => {
+    const processInfo = cli(["pane", "process-info", "--pane", paneId]).json
+      .result.process_info;
+    return (
+      processInfo.foreground_process_group_id === processInfo.shell_pid &&
+      processInfo.foreground_processes.every(
+        (process) => process.pid === processInfo.shell_pid,
+      )
+    );
+  };
+  async function invokeAction(action, callerPane = sourcePane) {
+    const before = panes(),
+      focused = before.filter((pane) => pane.focused),
+      intended = before.find((pane) => pane.pane_id === callerPane),
+      previous = new Set(actionLogs().map((log) => log.log_id)),
+      previousGuardRecords = guardRecords().length;
+    assert.equal(focused.length, 1);
+    assert.equal(intended?.cwd, source);
+    await until(
+      () => shellIdle(callerPane),
+      "Intended action source must be an idle shell",
+    );
+    try {
+      cli(["workspace", "focus", intended.workspace_id]);
+      assert.equal(panes().find((pane) => pane.focused)?.pane_id, callerPane);
+      assert.equal(panes().find((pane) => pane.focused)?.cwd, source);
+      cli([
+        "pane",
+        "run",
+        callerPane,
+        `${quote(binary)} --session ${quote(session)} plugin action invoke ${action} --plugin vultr.sandbox`,
+      ]);
+      const log = await until(() => {
+        const fresh = actionLogs().filter(
+          (entry) => !previous.has(entry.log_id) && entry.action_id === action,
+        );
+        assert.ok(
+          fresh.length <= 1,
+          "One invocation must have one exact action log",
+        );
+        const entry = fresh[0];
+        return entry && ["succeeded", "failed"].includes(entry.status)
+          ? entry
+          : null;
+      }, `Installed ${action} did not finish`);
+      const callers = guardRecords()
+        .slice(previousGuardRecords)
+        .filter(
+          (record) =>
+            record.entrypoint?.endsWith("/src/action.mjs") &&
+            record.action === action,
+        );
+      assert.equal(callers.length, 1);
+      assert.equal(callers[0].callerPaneId, callerPane);
+      assert.equal(callers[0].workspaceId, intended.workspace_id);
+      assert.equal(callers[0].callerCwd, source);
+      const records = log.stdout
+        .split("\n")
+        .filter((line) => line.startsWith("VULTR_RESULT "));
+      assert.equal(records.length, 1, log.stdout || log.stderr);
+      const receipt = JSON.parse(records[0].slice("VULTR_RESULT ".length));
+      assert.equal(receipt.action, action);
+      installedActionContexts.push({
+        action,
+        logId: log.log_id,
+        callerPaneId: callers[0].callerPaneId,
+        workspaceId: callers[0].workspaceId,
+        callerCwd: callers[0].callerCwd,
+        status: receipt.status,
+        workerId: receipt.workerId ?? null,
+        paneId: receipt.paneId ?? null,
+      });
+      return receipt;
+    } finally {
+      try {
+        await until(
+          () => shellIdle(callerPane),
+          "Action CLI must return to its source shell",
+        );
+      } finally {
+        cli(["workspace", "focus", focused[0].workspace_id]);
+        assert.equal(
+          panes().find((pane) => pane.focused)?.pane_id,
+          focused[0].pane_id,
+        );
+      }
+    }
+  }
+  const pluginConfig = cli([
+    "plugin",
+    "config-dir",
+    "vultr.sandbox",
+  ]).stdout.trim();
+  assert.ok(pluginConfig.startsWith(root + path.sep));
+  const { Store } = await import("../src/state.mjs");
+  const installedList = async () => {
+    const receipt = await invokeAction("list");
+    assert.equal(receipt.status, "observed");
+    return receipt.workers;
+  };
+  const initialSourcePane = panes().find((pane) => pane.pane_id === sourcePane);
+  assert.equal(
+    panes().filter(
+      (pane) => pane.workspace_id === initialSourcePane.workspace_id,
+    ).length,
+    1,
+  );
+  const firstStart = await invokeAction("start-agent");
+  assert.equal(firstStart.status, "opened", JSON.stringify(firstStart));
+  assert.equal(firstStart.workerId, null);
+  assert.ok(firstStart.paneId);
   await until(
     () =>
       cli([
         "pane",
         "read",
-        setupPane,
+        firstStart.paneId,
         "--source",
         "recent-unwrapped",
         "--lines",
         "20",
       ]).stdout.includes("Absolute path to 0600 API token file"),
-    "Installed onboarding entrypoint did not start",
+    "Missing-config Start did not open exact installed onboarding pane",
   );
-  cli(["plugin", "pane", "focus", setupPane]);
+  assert.equal((await installedList()).length, 0);
+  cli(["plugin", "pane", "focus", firstStart.paneId]);
   assert.notEqual(
-    cli(["agent", "get", setupPane], { allowFailure: true }).status,
+    cli(["agent", "get", firstStart.paneId], { allowFailure: true }).status,
     0,
     "Onboarding must not inherit a coding-agent hint",
   );
-  cli(["plugin", "pane", "close", setupPane]);
-
+  cli(["plugin", "pane", "close", firstStart.paneId]);
+  fs.mkdirSync(pluginConfig, { recursive: true, mode: 0o700 });
+  const configFile = path.join(pluginConfig, "config.json"),
+    dummyKey = path.join(root, "dummy-client"),
+    config = {
+      tokenFile: path.join(root, "dummy-token"),
+      sshPrivateKey: dummyKey,
+      sshPublicKey: path.join(root, "dummy-client.pub"),
+      allowCandidateAgents: true,
+    };
+  fs.writeFileSync(configFile, "{", { mode: 0o600 });
+  assert.equal((await invokeAction("start-agent")).code, "invalid_config");
+  fs.writeFileSync(configFile, JSON.stringify(config));
+  assert.equal(
+    (await invokeAction("start-agent")).code,
+    "credential_file_missing",
+  );
+  assert.equal((await installedList()).length, 0);
+  fs.writeFileSync(
+    config.tokenFile,
+    "synthetic placeholder; no provider credential",
+    { mode: 0o600 },
+  );
+  fs.writeFileSync(dummyKey, "synthetic placeholder; never used for SSH", {
+    mode: 0o600,
+  });
+  function ownedWorkerFiles(dir, id) {
+    if (!fs.existsSync(dir)) return [];
+    return fs.readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
+      const file = path.join(dir, entry.name);
+      return entry.isDirectory()
+        ? ownedWorkerFiles(file, id)
+        : entry.isFile() && entry.name === `${id}.json`
+          ? [file]
+          : [];
+    });
+  }
+  const created = [];
+  for (let i = 0; i < 2; i++) {
+    const receipt = await invokeAction("new-worker");
+    assert.equal(receipt.status, "opened", JSON.stringify(receipt));
+    assert.ok(receipt.workerId && receipt.paneId);
+    await until(
+      () =>
+        cli([
+          "pane",
+          "read",
+          receipt.paneId,
+          "--source",
+          "recent-unwrapped",
+          "--lines",
+          "40",
+        ]).stdout.includes("Type UPLOAD "),
+      "Installed New worker did not reach exact upload approval",
+    );
+    const files = ownedWorkerFiles(env.XDG_STATE_HOME, receipt.workerId);
+    assert.equal(files.length, 1);
+    const installedStore = new Store(path.dirname(files[0])),
+      record = installedStore.get(receipt.workerId),
+      manifest = JSON.parse(
+        fs.readFileSync(path.join(record.baseline, "manifest.json"), "utf8"),
+      ),
+      text = cli([
+        "pane",
+        "read",
+        receipt.paneId,
+        "--source",
+        "recent-unwrapped",
+        "--lines",
+        "40",
+      ]).stdout;
+    assert.equal(record.workerPane.paneId, receipt.paneId);
+    assert.equal(record.sourcePaneId, sourcePane);
+    assert.equal(record.localRoot, source);
+    assert.equal(record.phase, "upload-review");
+    assert.equal(record.vm, null);
+    assert.equal(record.pending, null);
+    assert.equal(record.uploadApproval, undefined);
+    assert.equal(record.guestBackend, "herdr");
+    assert.equal(record.baselineDigest, manifest.digest);
+    assert.deepEqual(
+      manifest.files.map((file) => file.path),
+      ["source.txt"],
+    );
+    assert.ok(text.includes(`/srv/herdr/workers/${record.id}/source`));
+    assert.ok(text.includes(`Type UPLOAD ${manifest.digest}`));
+    created.push({ receipt, record });
+  }
+  assert.notEqual(created[0].receipt.workerId, created[1].receipt.workerId);
+  assert.notEqual(created[0].receipt.paneId, created[1].receipt.paneId);
+  assert.notEqual(
+    created[0].record.agentAdapter.codexHome,
+    created[1].record.agentAdapter.codexHome,
+  );
+  assert.notEqual(created[0].record.baseline, created[1].record.baseline);
+  const selection = await invokeAction("start-agent");
+  assert.equal(selection.status, "selection_required");
+  assert.equal(selection.workers.length, 2);
+  assert.equal((await installedList()).length, 2);
+  const observedGuardRecords = guardRecords();
+  for (const entrypoint of ["action.mjs", "pane.mjs"])
+    assert.ok(
+      observedGuardRecords.some((record) =>
+        record.entrypoint?.endsWith(`/src/${entrypoint}`),
+      ),
+      `Installed ${entrypoint} must inherit the network guard`,
+    );
+  assert.equal(
+    observedGuardRecords.some((record) => record.unexpectedFetch),
+    false,
+  );
+  for (const { receipt } of created)
+    cli(["plugin", "pane", "close", receipt.paneId]);
   const dashboard = fileURLToPath(
     new URL("../test/fixtures/worker-dashboard.mjs", import.meta.url),
   );
@@ -238,7 +487,6 @@ try {
       ]).stdout.includes("Vultr worker >"),
     "Actual worker did not remain as a dashboard after transport return",
   );
-  const { Store } = await import("../src/state.mjs");
   const { requestWorker } = await import("../src/control.mjs");
   const store = new Store(path.join(root, "plugin-state")),
     id = "00000000-0000-0000-0000-000000000001";
@@ -329,6 +577,22 @@ try {
       hintRevokedAfterExit: true,
       pluginLinked: true,
       installedOnboarding: true,
+      installedFirstStartSetup: true,
+      installedTypedConfigFailures: true,
+      installedIndependentWorkers: true,
+      installedExactUploadReviews: true,
+      installedCallerContext: true,
+      installedActionContexts,
+      providerRequestsBeforeApproval: 0,
+      firstStartSetupReceipt: firstStart,
+      independentWorkerReceipts: created.map(({ receipt, record }) => ({
+        ...receipt,
+        phase: record.phase,
+        sourcePaneId: record.sourcePaneId,
+        source: `/srv/herdr/workers/${record.id}/source`,
+        home: record.agentAdapter.codexHome,
+        digest: record.baselineDigest,
+      })),
       explicitPluginFocus: true,
       persistentDashboard: true,
       ownerReconnect: true,

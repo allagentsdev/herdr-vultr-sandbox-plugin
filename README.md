@@ -57,6 +57,10 @@ the action picker. Onboarding asks for file paths and agent selection; it only
 checks key pairing and GET access. It does not allocate compute or prove write
 permission. No global configuration is changed by these example templates.
 
+First Start Agent or New Vultr worker opens this setup pane when `config.json`
+is missing, without creating a worker or allocating compute. Invalid configuration
+and missing credential files remain failures; fix those files explicitly.
+
 Before manual CLI use, supply the same plugin config/state/session environment
 as the intended Herdr caller, including an explicit `HERDR_PANE_ID` or plugin
 caller context. Never target another client's focused pane. Herdr supplies
@@ -65,6 +69,7 @@ caller context. Never target another client's focused pane. Herdr supplies
 
 ```sh
 node /absolute/plugin/src/action.mjs check-config
+node /absolute/plugin/src/action.mjs new-worker
 node /absolute/plugin/src/action.mjs list
 node /absolute/plugin/src/action.mjs info --worker EXACT_WORKER_UUID
 node /absolute/plugin/src/action.mjs reconnect --worker EXACT_WORKER_UUID
@@ -80,6 +85,22 @@ Accepted dashboard requests return a `requestId`; `info` exposes the latest 20
 status and a safe code. Poll that exact request ID. An interrupted request is
 never automatically replayed. A completed reconnect means its handler returned;
 consult transport/provider state for the remote process and allocation.
+
+`herdr plugin action invoke ACTION --plugin vultr.sandbox` uses the focused pane
+of its selected Herdr session. Before running it from a background terminal, use
+a supported control such as `herdr workspace focus WORKSPACE_ID`, verify the
+intended pane and cwd, and restore the previous focus after dispatch.
+
+Start Agent and Reconnect reuse the selected worker. Choose **New Vultr worker**
+to create another independent worker for the same checkout and workspace. It gets
+a fresh UUID, dashboard pane, remote agent home, source directory and dedicated
+instance after its own exact upload approval. It never copies another worker's
+login or shares its VM. `new-worker` cannot be combined with `--worker`;
+retry a provisional worker with `start-agent --worker EXACT_WORKER_UUID`.
+With multiple workers on one source, Start requires explicit UUID selection.
+A worker's own dashboard continues to select that worker even when another
+worker was created from that dashboard. If pane creation has an unknown result,
+inspect `list` and Herdr panes, then retry the retained UUID explicitly.
 
 ## Reviewed source and unattended SSH onboarding
 
