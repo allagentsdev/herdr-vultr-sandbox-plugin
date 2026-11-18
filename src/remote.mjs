@@ -290,15 +290,13 @@ export class Remote {
     return this.command(r, tmuxCommand(r));
   }
   attach(r) {
-    if (guestBackend(r) === "herdr")
-      return this.ssh.interactive(r, this.guestCommand(r, "attach"), {
-        agentKind: recordAdapter(r).capabilities.herdrDetectionKind,
-      });
-    return this.ssh.interactive(
-      r,
-      `test "$(tmux display-message -p -t ${q("herdr-" + r.id)} '#{pane_dead}')" = 0 && exec tmux attach-session -t ${q("herdr-" + r.id)}`,
-      { agentKind: recordAdapter(r).capabilities.herdrDetectionKind },
-    );
+    const command =
+      guestBackend(r) === "herdr"
+        ? this.guestCommand(r, "attach")
+        : `test "$(tmux display-message -p -t ${q("herdr-" + r.id)} '#{pane_dead}')" = 0 && exec tmux attach-session -t ${q("herdr-" + r.id)}`;
+    return this.ssh.interactive(r, command, {
+      agentKind: recordAdapter(r).capabilities.herdrDetectionKind,
+    });
   }
   login(r) {
     return this.ssh.interactive(r, recordAdapter(r).login);

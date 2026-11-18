@@ -5,6 +5,7 @@ import { namespace } from "./state.mjs";
 import { resolveGitContext } from "./context.mjs";
 import { resolveAdapter, adapterCommands, recordAdapter } from "./adapters.mjs";
 import { PluginError } from "./result.mjs";
+import { guestBackend } from "./guest-herdr.mjs";
 const fail = (code, message) => {
   throw new PluginError(code, message);
 };
@@ -147,7 +148,7 @@ export function workerInfo(r) {
     previousServerId: r.previousVm?.serverId ?? null,
     snapshotId: r.snapshot?.imageId ?? null,
     previousSnapshotId: r.snapshot?.previousImageId ?? null,
-    guestBackend: r.guestBackend ?? "tmux",
+    guestBackend: guestBackend(r),
     guestHerdr: r.guestHerdr ?? null,
     agentKind: a.kind,
     expectedVersion: a.version ?? null,

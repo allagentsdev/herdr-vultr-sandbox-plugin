@@ -1,10 +1,9 @@
-// Deployable guest runtime. All CLI calls target this worker's private socket.
 import fs from "node:fs";
 import path from "node:path";
 import { spawn, spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
+import { setTimeout as delay } from "node:timers/promises";
 const q = (s) => "'" + s.replaceAll("'", "'\"'\"'") + "'";
-const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 export const GUEST_HERDR_RELEASE = {
   version: "0.9.5",
   x86_64: {
