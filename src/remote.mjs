@@ -174,13 +174,6 @@ export class Remote {
     // A clone must consume its own instance metadata and new authenticated user-data.
     return this.command(r, "set -eu\ncloud-init clean\nsync");
   }
-  shutdown(r) {
-    // Return before shutdown severs SSH; a lost acknowledgement remains unknown.
-    return this.command(
-      r,
-      "set -eu\nnohup sh -c 'sleep 2; /sbin/shutdown -h now' </dev/null >/dev/null 2>&1 &",
-    );
-  }
   async checkpoint(r) {
     if (guestBackend(r) === "herdr") this.guest(r, "checkpoint");
     const { source, state } = remotePaths(r);

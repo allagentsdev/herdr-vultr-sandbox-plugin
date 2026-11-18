@@ -29,7 +29,7 @@ It is neither a live provider test nor an authenticated coding-agent trial.
 | Built-in/custom agent adapters                                  | `adapters`, `remote` tests                                                            | Codex 0.169.0, Claude 2.1.220, OpenCode 1.18.9 candidates; independent remote auth; no borrowed host login                                                                                                                                  |
 | Public Compound installation                                    | Pinned installer and modern profile tests; opt-in `test:codex-bootstrap`              | Public native plugin only; account sync/owner login separate; no private host skill/profile copying                                                                                                                                         |
 | Asynchronous create receipts                                    | `host-identity`, `provider` tests                                                     | Exact tags/cursor inventory; no action IDs; unknown or ambiguous match never repeats POST                                                                                                                                                   |
-| Power-off/resume                                                | `lifecycle`, `connections` tests                                                      | Guest graceful shutdown after quiesce/checkpoint; power-off still billed; Start never sent to running/transitioning instance                                                                                                                |
+| Power-off/resume                                                | `lifecycle`, `connections` tests                                                      | Exact provider Stop after quiesce/checkpoint, fresh observed OFF; still billed; Start never sent to running/transitioning instance                                                                                                          |
 | Snapshot hibernation/release                                    | `lifecycle` tests                                                                     | Exact operation description, `complete` status, size/OS/checkpoint gates and exact deletion approval; no image labels/action IDs                                                                                                            |
 | Snapshot restore                                                | Fresh pin in `host-identity`; source/auth/service gates in `remote`                   | New instance/IP; same frozen plan/disk; no API architecture field; actual cloud-init clone/restore pending                                                                                                                                  |
 | Unknown outcomes and recovery                                   | `lifecycle`, `worker-runtime`, `control` tests                                        | Receipt persisted before mutation; definitive rejections allow the next explicit retry, uncertain outcomes never replay; SSH deadlines bound hangs                                                                                          |
@@ -48,10 +48,14 @@ fresh-worker native lifecycle receipt. Snapshot release/restore requires its own
 exact approvals and observations. Nothing in the synthetic suite substitutes for
 those gates.
 
-**Provider Stop remains an open gate.** Guest-only shutdown did not establish
-provider OFF in the live trial; separately authorized exact `/halt`
-reconciliations were needed. This change does not correct that provider behavior
-or authorize an automatic production fallback. See
+**Live provider Stop verification remains open.** Guest-only shutdown did not
+establish provider OFF in the earlier live trial; separately authorized exact
+`/halt` reconciliations were needed. Normal Stop/Hibernate now submit that exact
+provider operation after application quiesce and a durable checkpoint, with
+persisted intent/acknowledgement and no uncertain-outcome replay. Local fixtures
+keep guest SSH acknowledgement separate from provider power. This correction
+still needs its own authorized live trial; it does not establish full native
+lifecycle or snapshot restore conformance. See
 [the recorded verification limits](verification.md#live-provider-stop-gate).
 
 Native guest runtime uses the pinned public 0.9.5 release, with architecture-specific

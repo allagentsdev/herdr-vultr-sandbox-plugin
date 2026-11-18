@@ -20,14 +20,25 @@ export function namespace(env = process.env) {
 }
 export function atomicJson(file, value) {
   const temp = `${file}.${randomUUID()}.tmp`;
+  let created = false;
   try {
-    fs.writeFileSync(temp, `${JSON.stringify(value, null, 2)}\n`, {
-      mode: 0o600,
-      flag: "wx",
-    });
+    const fd = fs.openSync(temp, "wx", 0o600);
+    created = true;
+    try {
+      fs.writeFileSync(fd, `${JSON.stringify(value, null, 2)}\n`);
+      fs.fsyncSync(fd);
+    } finally {
+      fs.closeSync(fd);
+    }
     fs.renameSync(temp, file);
+    const directory = fs.openSync(path.dirname(file), "r");
+    try {
+      fs.fsyncSync(directory);
+    } finally {
+      fs.closeSync(directory);
+    }
   } finally {
-    fs.rmSync(temp, { force: true });
+    if (created) fs.rmSync(temp, { force: true });
   }
 }
 function deadOwner(file) {

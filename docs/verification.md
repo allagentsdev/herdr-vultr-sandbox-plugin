@@ -96,11 +96,48 @@ Those reconciliation receipts are distinct from plugin success. Snapshot locking
 can subsequently produce `power_status=stopped` with `server_status=locked`;
 complete/usable image and fresh stopped/unlocked observations are separate gates.
 
-The guest transport implementation leaves provider policy unchanged. Do not
-claim full lifecycle success or infer that native Herdr fixes guest-only Stop.
-A production correction still needs review of checkpoint/quiesce ordering,
-durable submission/acknowledgement and unknown-outcome/no-retry behavior. Private
-raw live receipts, exact IDs and cleanup decisions remain outside the repository.
+The local correction replaces guest-only shutdown with the documented exact
+provider Stop after graceful application/agent quiesce, service hooks and a
+flushed durable source checkpoint. Hibernate also cleans and flushes cloud-init's
+clone cache first. No guest OS shutdown behavior is inferred from the provider
+operation. A new Stop receipt records `providerOperation: "halt"` and the exact
+instance; intent and attempt persist before the bodyless POST, acknowledgement
+persists separately, and fresh provider OFF is required before snapshot creation.
+Historical guest-shutdown receipts cannot authorize a new provider mutation.
+
+The discriminating regression first failed against the unchanged lifecycle:
+with guest acknowledgement independent of provider power, Stop observed
+`running` instead of `off`. The corrected fixtures change provider power only
+through the exact API operation. Focused local tests prove Stop/Hibernate order,
+durable checkpoint and intent before submission, separate acknowledgement/OFF,
+unknown request and failed acknowledgement/observation without replay, explicit
+retry after definitive rejection, ownership/target/block gates, OFF idempotency,
+Start protection and stopped-but-locked remaining transitioning. Existing snapshot
+identity/checkpoint/release and restore-readiness proofs remain intact.
+
+The failed allocated Resume regression runs the actual activation command through
+an owned local shell: a configured restart hook launches a synthetic writer and
+then fails. Its heartbeat advances after the failure; normal Stop waits for that
+writer to exit before capturing fresh source. Both stopped and already-running
+allocated Resume retire the old release authority, including failed Start or
+activation, while retaining the previous snapshot. A separate upgrade proof runs
+the previous lifecycle through the failing hook, reuses its actual stored record
+with the corrected lifecycle, and verifies fresh Stop retires the obsolete release. Intentional Recover of an
+unchanged quiescent Hibernate stage still skips repeated hooks and mutations.
+
+Real Store tests observe file fsync, rename, parent-directory fsync, then the
+synthetic provider request in that order. Injected file/directory sync failures
+prevent submission, close descriptors and remove owned temporary files; a
+post-rename directory-sync failure retains an attempted receipt and prevents
+replay. This checks the actual persistence protocol and failure gating. No host
+power loss, hardware durability experiment or live provider operation is implied.
+
+These are local synthetic boundary proofs. The correction still needs an
+authorized live trial. A retained legacy image restore can verify its own
+provider/source/auth behavior but cannot establish native conformance. A separate
+fresh native logical worker needs independent source approval, home, login and
+trust; native snapshot restore remains untested. Private raw live receipts,
+exact IDs and cleanup decisions remain outside the repository.
 
 `test:guest-herdr` also requires Python 3 for its controlling-PTY driver. It starts
 only owned isolated stock Herdr servers through the

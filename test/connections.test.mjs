@@ -1,6 +1,11 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { randomUUID } from "node:crypto";
+import { randomUUID, createHash } from "node:crypto";
+import fs from "node:fs";
+import path from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
+import { Remote } from "../src/remote.mjs";
+import { runSync, shellQuote as q } from "../src/process.mjs";
 import { Store } from "../src/state.mjs";
 import { Lifecycle } from "../src/lifecycle.mjs";
 import { Connections } from "../src/connections.mjs";
@@ -41,6 +46,7 @@ async function fixture(t) {
     async request(method, url, body) {
       events.push(url);
       if (url.endsWith("/start")) power = "running";
+      if (url.endsWith("/halt")) power = "off";
       if (url === "/snapshots")
         this.image = {
           id: "snap",
@@ -79,9 +85,6 @@ async function fixture(t) {
       events.push("verify");
     },
     async prepareSnapshot() {},
-    async shutdown() {
-      power = "off";
-    },
     async quiesce() {
       events.push("quiesce");
     },
@@ -282,4 +285,174 @@ test("lost native launch acknowledgement preserves restore readiness without inv
   const next = await f.connections.prepare(f.id, "reconnect");
   assert.equal(verified, 1);
   assert.deepEqual(next.guestHerdr, observed);
+});
+
+async function failedAllocatedResume(t, alreadyRunning = false) {
+  const f = await fixture(t),
+    dir = temporary(t),
+    source = path.join(dir, "source"),
+    state = path.join(dir, "state"),
+    writer = path.join(dir, "writer.mjs"),
+    written = path.join(source, "written"),
+    pidFile = path.join(dir, "writer.pid"),
+    exitFile = path.join(dir, "writer-exited");
+  fs.mkdirSync(source);
+  fs.mkdirSync(state);
+  fs.writeFileSync(
+    path.join(state, "identity.json"),
+    JSON.stringify({ workerId: f.id }),
+  );
+  fs.writeFileSync(path.join(state, "launch.sh"), "synthetic agent");
+  fs.writeFileSync(written, "original source\n");
+  fs.writeFileSync(
+    writer,
+    `import fs from "node:fs";
+const timer = setInterval(() => fs.appendFileSync(process.argv[2], "new work\\n"), 10);
+process.on("SIGTERM", () => { clearInterval(timer); process.exit(0); });
+process.on("exit", () => fs.writeFileSync(process.argv[3], "exited"));
+setTimeout(() => { clearInterval(timer); }, 5000);
+`,
+  );
+  let pid;
+  const stopWriter = async () => {
+    if (!pid) return;
+    const target = pid;
+    try {
+      process.kill(target, "SIGTERM");
+    } catch (error) {
+      if (error.code !== "ESRCH") throw error;
+    }
+    let exited = false;
+    for (let i = 0; i < 100 && !exited; i++) {
+      try {
+        const stat = fs.readFileSync(`/proc/${target}/stat`, "utf8");
+        exited = stat.slice(stat.lastIndexOf(")") + 2).startsWith("Z ");
+      } catch (error) {
+        if (error.code !== "ENOENT") throw error;
+        exited = true;
+      }
+      if (!exited) await delay(10);
+    }
+    assert.equal(exited, true, "owned hook writer must exit before checkpoint");
+    assert.equal(fs.readFileSync(exitFile, "utf8"), "exited");
+    pid = null;
+  };
+  t.after(stopWriter);
+  f.remote.quiesce = async () => {
+    f.events.push("quiesce");
+    await stopWriter();
+    const stopped = fs.readFileSync(written, "utf8");
+    await delay(30);
+    assert.equal(fs.readFileSync(written, "utf8"), stopped);
+  };
+  f.remote.checkpoint = async () => {
+    f.events.push("checkpoint");
+    return {
+      workerId: f.id,
+      sourceDigest: "a".repeat(64),
+      currentSourceDigest: createHash("sha256")
+        .update(fs.readFileSync(written))
+        .digest("hex"),
+      at: new Date().toISOString(),
+    };
+  };
+  const release = await f.life.hibernate(f.id),
+    savedSnapshot = f.store.get(f.id).snapshot;
+  await f.store.update(f.id, (r) => ({
+    ...r,
+    config: {
+      ...r.config,
+      adapter: {
+        authCheck: ":",
+        restart: `${q(process.execPath)} ${q(writer)} ${q(written)} ${q(exitFile)} </dev/null >/dev/null 2>&1 & echo $! > ${q(pidFile)}; exit 27`,
+      },
+    },
+  }));
+  const actual = new Remote({
+    exec(record, command, options = {}) {
+      return runSync(
+        "sh",
+        [
+          "-c",
+          command
+            .replaceAll(`/srv/herdr/workers/${record.id}/source`, source)
+            .replaceAll(`/var/lib/herdr/workers/${record.id}`, state),
+        ],
+        options,
+      );
+    },
+  });
+  f.remote.activate = (record) => {
+    assert.equal(f.store.get(f.id).hibernate, null);
+    return actual.activate(record);
+  };
+  if (alreadyRunning) await f.api.request("POST", "/instances/vm-42/start");
+  f.events.length = 0;
+  await assert.rejects(f.connections.prepare(f.id, "resume"), {
+    code: "command_failed",
+  });
+  pid = Number(fs.readFileSync(pidFile, "utf8"));
+  assert.ok(Number.isSafeInteger(pid) && pid > 0);
+  for (
+    let i = 0;
+    i < 100 && !fs.readFileSync(written, "utf8").includes("new work");
+    i++
+  )
+    await delay(10);
+  assert.match(fs.readFileSync(written, "utf8"), /new work/);
+  const heartbeat = fs.statSync(written).size;
+  await delay(30);
+  assert.ok(
+    fs.statSync(written).size > heartbeat,
+    "writer heartbeat must advance after failed Resume",
+  );
+  t.diagnostic(
+    `configured restart hook launched a writer then exited 27; allocated Resume started ${alreadyRunning ? "running" : "off"}`,
+  );
+  return { ...f, release, savedSnapshot, written };
+}
+
+test("failed allocated Resume restarts a real hook writer then normal Stop captures fresh work", async (t) => {
+  for (const alreadyRunning of [false, true]) {
+    const f = await failedAllocatedResume(t, alreadyRunning);
+    await f.life.power(f.id, "shutdown");
+    assert.deepEqual(f.events.slice(-3), [
+      "quiesce",
+      "checkpoint",
+      "/instances/vm-42/halt",
+    ]);
+    assert.equal(
+      f.store.get(f.id).powerCheckpoint.currentSourceDigest,
+      createHash("sha256").update(fs.readFileSync(f.written)).digest("hex"),
+    );
+    assert.notEqual(
+      f.store.get(f.id).powerCheckpoint.currentSourceDigest,
+      f.savedSnapshot.checkpoint.currentSourceDigest,
+    );
+    assert.deepEqual(f.store.get(f.id).snapshot, f.savedSnapshot);
+  }
+});
+
+test("failed allocated Resume invalidates old release authority while retaining its snapshot", async (t) => {
+  const f = await failedAllocatedResume(t);
+  await f.life.power(f.id, "shutdown");
+  const request = f.api.request;
+  let deletions = 0;
+  f.api.request = async (...args) => {
+    if (args[0] === "DELETE") {
+      deletions++;
+      assert.fail("obsolete release authority reached DELETE");
+    }
+    return request(...args);
+  };
+  await assert.rejects(f.life.release(f.id, f.release.confirmation), {
+    code: "approval_required",
+  });
+  assert.equal(deletions, 0);
+  assert.deepEqual(f.store.get(f.id).snapshot, f.savedSnapshot);
+  assert.equal(f.store.get(f.id).vm.serverId, "vm-42");
+  assert.equal(
+    f.events.some((event) => event.includes("DELETE")),
+    false,
+  );
 });
