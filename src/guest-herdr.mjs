@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { spawn, spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
+import { createConnection } from "node:net";
 import { setTimeout as delay } from "node:timers/promises";
 const q = (s) => "'" + s.replaceAll("'", "'\"'\"'") + "'";
 export const GUEST_HERDR_RELEASE = {
@@ -27,7 +28,8 @@ export async function guestHerdr(op, state, workerId, source) {
     binary = state + "/tools/herdr",
     metadataFile = state + "/herdr-worker.json",
     approvalFile = state + "/resume-approved",
-    writerLease = state + "/herdr-agent.lock";
+    writerLease = state + "/herdr-agent.lock",
+    serverFile = state + "/herdr-server.json";
   // Disk approval alone never authorizes an ordinary reconnect. Consume it before
   // setup can fail; only the caller that just completed Resume gates may use it.
   const approved = op === "resume" && fs.existsSync(approvalFile);
@@ -87,6 +89,123 @@ export async function guestHerdr(op, state, workerId, source) {
   const requireNoWriter = () => {
     if (writerLive()) throw Error("guest_writer_live");
   };
+  const processBirth = (pid) => {
+    try {
+      const stat = fs.readFileSync(`/proc/${pid}/stat`, "utf8");
+      const fields = stat.slice(stat.lastIndexOf(")") + 2).split(/\s+/);
+      return { state: fields[0], started: fields[19] };
+    } catch (error) {
+      if (error.code === "ENOENT" || error.code === "ESRCH") return null;
+      throw Error("guest_herdr_stop_unconfirmed");
+    }
+  };
+  const bootId = () =>
+    fs.readFileSync("/proc/sys/kernel/random/boot_id", "utf8").trim();
+  const socketPin = () => {
+    try {
+      const stat = fs.lstatSync(env.HERDR_SOCKET_PATH, { bigint: true });
+      if (!stat.isSocket()) throw Error("guest_herdr_stop_unconfirmed");
+      return {
+        dev: String(stat.dev),
+        ino: String(stat.ino),
+        ctimeNs: String(stat.ctimeNs),
+      };
+    } catch (error) {
+      if (error.code === "ENOENT") return null;
+      throw Error("guest_herdr_stop_unconfirmed");
+    }
+  };
+  const saveServer = (record) => {
+    fs.writeFileSync(serverFile + ".tmp", JSON.stringify(record), {
+      mode: 0o600,
+    });
+    fs.renameSync(serverFile + ".tmp", serverFile);
+  };
+  const serverDead = (record) => {
+    if (
+      record?.workerId !== workerId ||
+      !Number.isSafeInteger(record.pid) ||
+      record.pid <= 0 ||
+      typeof record.started !== "string" ||
+      !/^\d+$/.test(record.started) ||
+      typeof record.bootId !== "string" ||
+      !/^[a-f0-9-]{36}$/.test(record.bootId)
+    )
+      throw Error("guest_herdr_stop_unconfirmed");
+    const current = processBirth(record.pid);
+    if (!current) return true;
+    // A different boot or birth means the recorded original process is gone;
+    // never signal the unrelated process that now happens to hold the PID.
+    if (record.bootId !== bootId() || record.started !== current.started)
+      return true;
+    return ["Z", "X"].includes(current.state);
+  };
+  const readServer = () => {
+    if (!fs.existsSync(serverFile)) return null;
+    try {
+      return JSON.parse(fs.readFileSync(serverFile, "utf8"));
+    } catch {
+      throw Error("guest_herdr_stop_unconfirmed");
+    }
+  };
+  const requireOwnedServer = () => {
+    const record = readServer();
+    if (!record || serverDead(record))
+      throw Error("guest_herdr_stop_unconfirmed");
+    const current = processBirth(record.pid),
+      socket = socketPin();
+    if (
+      !current ||
+      record.bootId !== bootId() ||
+      record.started !== current.started ||
+      !socket ||
+      JSON.stringify(socket) !== JSON.stringify(record.socket)
+    )
+      throw Error("guest_herdr_stop_unconfirmed");
+  };
+  const socketRefused = () =>
+    new Promise((resolve) => {
+      const socket = createConnection({ path: env.HERDR_SOCKET_PATH });
+      let settled = false;
+      const finish = (refused) => {
+        if (settled) return;
+        settled = true;
+        socket.destroy();
+        resolve(refused);
+      };
+      socket.once("connect", () => finish(false));
+      socket.once("error", (error) => finish(error.code === "ECONNREFUSED"));
+      socket.setTimeout(1000, () => finish(false));
+    });
+  const settleDeadServer = async (waitForWriter = false) => {
+    if (writerLive()) {
+      if (waitForWriter) return false;
+      throw Error("guest_writer_live");
+    }
+    const socket = socketPin();
+    const record = readServer();
+    if (!record) {
+      if (socket || read()) throw Error("guest_herdr_stop_unconfirmed");
+      return true; // No server launch has ever been recorded in this fresh state.
+    }
+    if (!serverDead(record)) return false;
+    if (socket && JSON.stringify(socket) !== JSON.stringify(record.socket))
+      throw Error("guest_herdr_stop_unconfirmed");
+    // Even a dead recorded process cannot authorize removing a currently
+    // listening or uncertain endpoint. Only kernel-confirmed refusal is stale.
+    if (socket && !(await socketRefused())) return false;
+    // Callers hold the worker lock. Recheck the writer, process birth and exact
+    // socket immediately before unlinking; never remove a replacement endpoint.
+    if (writerLive()) {
+      if (waitForWriter) return false;
+      throw Error("guest_writer_live");
+    }
+    if (!serverDead(record)) return false;
+    if (JSON.stringify(socketPin()) !== JSON.stringify(socket))
+      throw Error("guest_herdr_stop_unconfirmed");
+    if (socket) fs.unlinkSync(env.HERDR_SOCKET_PATH);
+    return true;
+  };
   const inspect = () => {
     const m = read(),
       observedAt = new Date().toISOString();
@@ -140,18 +259,22 @@ export async function guestHerdr(op, state, workerId, source) {
     };
   }
   if (op === "quiesce") {
-    if (online()) cli(["server", "stop"]);
-    else requireNoWriter();
-    for (let i = 0; i < 100 && fs.existsSync(env.HERDR_SOCKET_PATH); i++)
+    const wasOnline = online();
+    if (wasOnline) {
+      requireOwnedServer();
+      cli(["server", "stop"]);
+    }
+    for (let i = 0; i < 100; i++) {
+      if (await settleDeadServer(wasOnline))
+        return {
+          backend: "herdr",
+          status: "quiesced",
+          observedAt: new Date().toISOString(),
+        };
+      if (!wasOnline) break;
       await delay(50);
-    if (fs.existsSync(env.HERDR_SOCKET_PATH))
-      throw Error("guest_herdr_stop_unconfirmed");
-    requireNoWriter();
-    return {
-      backend: "herdr",
-      status: "quiesced",
-      observedAt: new Date().toISOString(),
-    };
+    }
+    throw Error("guest_herdr_stop_unconfirmed");
   }
   if (op === "attach") {
     const observed = inspect();
@@ -205,9 +328,11 @@ export async function guestHerdr(op, state, workerId, source) {
   if (op === "resume" && !approved)
     throw Error("guest_resume_approval_required");
   const serverLost = !online();
+  if (!serverLost) requireOwnedServer();
   if (op === "restart" && serverLost) throw Error("guest_resume_required");
   if (serverLost) {
-    requireNoWriter();
+    if (!(await settleDeadServer()))
+      throw Error("guest_herdr_stop_unconfirmed");
     const previous = read();
     if (previous) save({ ...previous, resumeRequired: true });
     for (const dir of [
@@ -224,6 +349,8 @@ export async function guestHerdr(op, state, workerId, source) {
       { mode: 0o600 },
     );
     const log = fs.openSync(base + "/server.log", "a", 0o600);
+    // Persist intent before spawning so an interrupted launch stays uncertain.
+    saveServer({ workerId, pid: null });
     const server = spawn(binary, ["server"], {
       cwd: source,
       env,
@@ -232,8 +359,28 @@ export async function guestHerdr(op, state, workerId, source) {
     });
     server.unref();
     fs.closeSync(log);
+    const birth = server.pid && processBirth(server.pid);
+    if (!birth) throw Error("guest_herdr_server_unavailable");
+    const serverRecord = {
+      workerId,
+      pid: server.pid,
+      started: birth.started,
+      bootId: bootId(),
+      socket: null,
+    };
+    saveServer(serverRecord);
     for (let i = 0; i < 100 && !online(); i++) await delay(50);
     if (!online()) throw Error("guest_herdr_server_unavailable");
+    const current = processBirth(server.pid);
+    if (
+      !current ||
+      current.started !== serverRecord.started ||
+      ["Z", "X"].includes(current.state)
+    )
+      throw Error("guest_herdr_server_unavailable");
+    const socket = socketPin();
+    if (!socket) throw Error("guest_herdr_server_unavailable");
+    saveServer({ ...serverRecord, socket });
   }
   const previous = read(),
     observed = inspect();
