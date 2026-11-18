@@ -10,9 +10,10 @@ test("private worker owner survives transport work, rejects duplicate owner and 
   const store = new Store(temporary(t)),
     id = randomUUID();
   let busy = true;
-  const close = await serveWorker(store, id, (action) => ({
+  const close = await serveWorker(store, id, (action, requestId) => ({
     status: action === "ping" ? "alive" : busy ? "attached" : "queued",
     paneId: "w1:p2",
+    requestId,
   }));
   assert.equal(
     fs.statSync(path.join(store.artifacts(id), "control.sock")).mode & 0o777,
@@ -94,6 +95,11 @@ test("lost and malformed owner replies preserve submitted request correlation", 
     "{}\n",
     '{"status":42}\n',
     "destroy",
+    '{"status":"queued"}\n',
+    '{"status":"queued","requestId":null}\n',
+    '{"status":"queued","requestId":42}\n',
+    '{"status":"queued","requestId":"invalid"}\n',
+    '{"status":"queued","requestId":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}\n',
   ];
   for (const [index, reply] of replies.entries())
     await t.test(String(index), async (t) => {
@@ -137,10 +143,14 @@ test("private control refuses malformed client UUIDs before its handler and acce
     store = new Store(temporary(t)),
     id = randomUUID();
   let calls = 0;
-  const close = await serveWorker(store, id, () => {
-    calls++;
-    return { status: "queued" };
-  });
+  const close = await serveWorker(
+    store,
+    id,
+    (_action, requestId = randomUUID()) => {
+      calls++;
+      return { status: "queued", requestId };
+    },
+  );
   const send = (requestId) =>
     new Promise((resolve, reject) => {
       const socket = net.createConnection(
@@ -184,6 +194,25 @@ test("private control correlates an asynchronous accepted reply with the client 
     assert.match(receivedId, /^[0-9a-f-]{36}$/);
     assert.equal(result.status, "queued");
     assert.equal(result.requestId, receivedId);
+  } finally {
+    await close();
+  }
+});
+
+test("private control accepts a valid different UUID from a legacy queued owner", async (t) => {
+  const store = new Store(temporary(t)),
+    id = randomUUID(),
+    legacyId = randomUUID().toUpperCase();
+  let submittedId;
+  const close = await serveWorker(store, id, (_action, requestId) => {
+    submittedId = requestId;
+    return { status: "queued", requestId: legacyId };
+  });
+  try {
+    const result = await requestWorker(store, id, "stop");
+    assert.equal(result.status, "queued");
+    assert.equal(result.requestId, legacyId);
+    assert.notEqual(result.requestId.toLowerCase(), submittedId);
   } finally {
     await close();
   }

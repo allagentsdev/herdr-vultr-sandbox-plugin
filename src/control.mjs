@@ -3,6 +3,9 @@ import path from "node:path";
 import net from "node:net";
 import { createHash, randomUUID } from "node:crypto";
 import { PluginError } from "./result.mjs";
+const validRequestId = (value) =>
+  typeof value === "string" &&
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value);
 const socketPath = (store, id) => {
   const direct = path.join(store.artifacts(id), "control.sock");
   if (Buffer.byteLength(direct) < 96) return direct;
@@ -64,7 +67,8 @@ export function requestWorker(
             !result ||
             Array.isArray(result) ||
             typeof result.status !== "string" ||
-            !result.status
+            !result.status ||
+            (result.status === "queued" && !validRequestId(result.requestId))
           )
             return uncertain();
           finish(result);
@@ -121,10 +125,7 @@ export async function serveWorker(store, id, handler) {
             if (request.workerId !== id) throw Error();
             if (
               request.requestId !== undefined &&
-              (typeof request.requestId !== "string" ||
-                !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
-                  request.requestId,
-                ))
+              !validRequestId(request.requestId)
             )
               throw Error();
             result = await handler(request.action, request.requestId);
