@@ -139,3 +139,34 @@ test("malformed inventory and repeated cursor fail closed", async () => {
     { code: "provider_invalid" },
   );
 });
+
+test("provider Stop uses pinned exact Halt POST without a body or action ID", async () => {
+  const api = new Cloud("synthetic", {
+    fetch: async (url, options) => {
+      assert.equal(url, "https://api.vultr.com/v2/instances/vm/halt");
+      assert.equal(options.method, "POST");
+      assert.equal(Object.hasOwn(options, "body"), false);
+      return response(null, 204);
+    },
+  });
+  assert.deepEqual(await api.request("POST", "/instances/vm/halt"), {});
+});
+
+test("stopped but locked is transitioning and never confirms provider OFF", async () => {
+  const api = new Cloud("synthetic", {
+    attempts: 1,
+    fetch: async (url) =>
+      url.includes("/blocks")
+        ? response({ blocks: [], meta: { links: {} } })
+        : response({
+            instance: {
+              id: "vm",
+              status: "active",
+              power_status: "stopped",
+              server_status: "locked",
+            },
+          }),
+  });
+  assert.equal((await api.getServer("vm")).powerState, "transitioning");
+  await assert.rejects(api.waitStatus("vm", "off"), { code: "status_pending" });
+});

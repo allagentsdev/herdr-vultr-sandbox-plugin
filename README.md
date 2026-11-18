@@ -8,7 +8,7 @@ Closing a pane disconnects the UI and leaves the worker and billed allocation.
 This is a candidate implementation. An owner-authorized live trial verified the
 merged legacy worker's bootstrap, independent Codex login and allocated resume,
 plus separate native guest Herdr/Codex process proofs. **Full lifecycle
-conformance remains open**, including the provider Stop discrepancy below and
+conformance remains open**, including live verification of the provider Stop correction below and
 the complete fresh-worker native Herdr path. Local fake-provider tests and
 isolated actual Herdr 0.9.5 contracts remain separate evidence.
 See [capabilities](docs/capability-parity.md), [architecture](docs/adr/0001-vultr-worker-lifecycle.md)
@@ -152,14 +152,16 @@ Filesystem snapshots alone do not establish application consistency.
 
 ## Dashboard and lifecycle
 
-The live trial found a provider lifecycle gap: graceful guest shutdown left the
-instance API reporting running. The test reached provider stopped power only
-after separately authorized, exact-target `/halt` reconciliation. Vultr documents
-that endpoint as its provider Stop operation. This transport change does not fix
-the plugin's guest-only Stop or establish full Stop/Hibernate conformance. The
-pending receipt, checkpoint and billed allocation remain visible; no automatic
-provider fallback or mutation replay is implemented. See the
-[verification limits](docs/verification.md#live-provider-stop-gate).
+The live trial found that guest shutdown acknowledgement and disappearing SSH
+did not establish provider OFF. Normal Stop and Hibernate now quiesce the agent
+and configured services, persist a flushed source checkpoint, then submit Vultr's
+exact provider Stop (`POST /instances/<ID>/halt`) and poll fresh provider state.
+Hibernate also cleans and flushes cloud-init's clone cache before Stop. This is
+one normal provider operation, with durable intent and a separate acknowledgement;
+it is not a guest-shutdown fallback. Application consistency depends on the
+configured quiesce hooks and checkpoint, not an assumed provider OS shutdown
+behavior. Local tests cover this correction; an authorized live trial remains
+pending. See the [verification limits](docs/verification.md#live-provider-stop-gate).
 
 New logical workers run pinned stock Herdr 0.9.5 on the guest, with a private
 `worker-<UUID>` session and durable state under the worker directory. Reconnect
@@ -184,18 +186,18 @@ independent guest agent login remain in force. The dashboard is never an agent
 input target. Local continuation metadata contains the absolute reconnect command,
 never an invented native conversation ID.
 
-| Control          | Behavior                                                                                                                               |
-| ---------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
-| Stop             | Quiesce, durable source checkpoint, graceful guest shutdown, poll Vultr stopped state; still billed                                    |
-| Resume allocated | Start only a confirmed stopped instance, then pinned SSH/auth/services; running instances are not restarted                            |
-| Hibernate        | Quiesce/checkpoint, clean cloud-init clone cache, graceful shutdown, snapshot complete/identity/OS checks, then exact release approval |
-| Release          | `DELETE <instance ID> SNAPSHOT <snapshot ID>`; cancelled approval retains the off, billed instance                                     |
-| Resume snapshot  | New instance/host pin on the same frozen plan; verify worker/checkpoint/source/auth and run restart hooks                              |
-| Delete server    | Exact `DELETE <instance ID>`; intentionally destructive disk deletion; snapshots retained                                              |
-| Replace / Forget | Exact deletion or unallocated-worker approval; mappings change only after confirmed deletion; recovery history retained                |
-| Recover          | Observe retained create/power/snapshot/delete receipt without duplicate submission                                                     |
-| Apply changes    | Validate returned source/patch receipt and exact `APPLY <digest>`; preserve host index and unrelated local changes                     |
-| q / pane close   | Close local control surface only; no cloud deletion or stop implied                                                                    |
+| Control          | Behavior                                                                                                                    |
+| ---------------- | --------------------------------------------------------------------------------------------------------------------------- |
+| Stop             | Quiesce, durable source checkpoint, exact provider Stop, poll fresh Vultr OFF; still billed                                 |
+| Resume allocated | Start only a confirmed stopped instance, then pinned SSH/auth/services; running instances are not restarted                 |
+| Hibernate        | Quiesce/checkpoint, clean cloud-init clone cache, provider Stop and fresh OFF, snapshot checks, then exact release approval |
+| Release          | `DELETE <instance ID> SNAPSHOT <snapshot ID>`; cancelled approval retains the off, billed instance                          |
+| Resume snapshot  | New instance/host pin on the same frozen plan; verify worker/checkpoint/source/auth and run restart hooks                   |
+| Delete server    | Exact `DELETE <instance ID>`; intentionally destructive disk deletion; snapshots retained                                   |
+| Replace / Forget | Exact deletion or unallocated-worker approval; mappings change only after confirmed deletion; recovery history retained     |
+| Recover          | Observe retained create/power/snapshot/delete receipt without duplicate submission                                          |
+| Apply changes    | Validate returned source/patch receipt and exact `APPLY <digest>`; preserve host index and unrelated local changes          |
+| q / pane close   | Close local control surface only; no cloud deletion or stop implied                                                         |
 
 Vultr returns no Hetzner action IDs. A durable receipt records operation UUID,
 submission intent/time, exact resource and acknowledgement; observed state
@@ -203,8 +205,10 @@ settles it. Instances use exact ownership/operation tags; snapshots use an exact
 operation description because snapshots have no tags. Snapshot completion is
 `complete`, not `available`. Blocks come from separate account inventory and
 block lifecycle mutations. Start can restart a running instance, so it is never
-sent speculatively. The plugin does not submit provider `/halt`, reinstall/rebuild
-or automatic mutation retries. Operator changes during a transition can leave a receipt requiring manual
+sent speculatively. The plugin submits exact-instance `/halt` for Stop after application quiesce and
+checkpoint. It never submits bulk halt, reinstall/rebuild or automatic mutation retries.
+Historical guest-shutdown receipts only observe their retained target; they never
+authorize a new provider Stop. An acknowledged request still requires observed OFF. Operator changes during a transition can leave a receipt requiring manual
 inspection; this favors retained data over automatic convergence.
 
 Power-off is still billed. Hibernation exchanges instance charges for separately

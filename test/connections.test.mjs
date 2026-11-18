@@ -41,6 +41,7 @@ async function fixture(t) {
     async request(method, url, body) {
       events.push(url);
       if (url.endsWith("/start")) power = "running";
+      if (url.endsWith("/halt")) power = "off";
       if (url === "/snapshots")
         this.image = {
           id: "snap",
@@ -79,9 +80,6 @@ async function fixture(t) {
       events.push("verify");
     },
     async prepareSnapshot() {},
-    async shutdown() {
-      power = "off";
-    },
     async quiesce() {
       events.push("quiesce");
     },

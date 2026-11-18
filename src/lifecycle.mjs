@@ -248,10 +248,12 @@ export class Lifecycle {
     if (!["shutdown", "poweron"].includes(kind))
       fail("invalid_operation", "Unsupported power operation.");
     let r = this.store.get(id);
-    const s = await this.owned(r);
+    let s = await this.owned(r);
     if (!s) fail("server_missing", "No allocated instance.");
     if (r.pending && r.pending.kind !== kind)
       fail("operation_pending", "Finish the retained operation first.");
+    if (r.pending && r.pending.serverId !== r.vm.serverId)
+      fail("stale_server", "Power receipt targets another instance.");
     const status = kind === "shutdown" ? "off" : "running";
     if (s.powerState === status)
       return this.store.update(id, (v) => ({ ...v, pending: null }));
@@ -264,7 +266,10 @@ export class Lifecycle {
           powerCheckpoint: checkpoint,
         }));
       }
-      r = await this.receipt(id, kind, { serverId: r.vm.serverId });
+      r = await this.receipt(id, kind, {
+        serverId: r.vm.serverId,
+        ...(kind === "shutdown" ? { providerOperation: "halt" } : {}),
+      });
     }
     if (r.pending.serverId !== r.vm.serverId)
       fail("stale_server", "Power receipt targets another instance.");
@@ -276,15 +281,26 @@ export class Lifecycle {
           "Power request outcome unknown; no command replayed. Observe until target state is confirmed.",
         );
     } else {
+      if (kind === "shutdown" && r.pending.providerOperation !== "halt")
+        fail(
+          "outcome_unknown",
+          "Historical guest shutdown receipt cannot authorize provider Stop. Observe the retained target; no request replayed.",
+        );
+      s = await this.owned(r);
+      if (!s) fail("server_missing", "No allocated instance.");
+      if (s.powerState === status)
+        return this.store.update(id, (v) => ({ ...v, pending: null }));
       if (kind === "poweron" && s.powerState !== "off")
         fail(
           "status_pending",
           "Start is allowed only for a confirmed stopped instance; Vultr Start can restart a running instance.",
         );
       r = await this.attempted(id);
-      if (kind === "shutdown") await this.remote.shutdown(r);
-      else
-        await this.submit(id, "POST", `/instances/${resourceId(s.id)}/start`);
+      await this.submit(
+        id,
+        "POST",
+        `/instances/${resourceId(s.id)}/${kind === "shutdown" ? "halt" : "start"}`,
+      );
       r = await this.store.update(id, (v) => ({
         ...v,
         pending: { ...v.pending, acknowledged: true },
@@ -346,7 +362,7 @@ export class Lifecycle {
             if ((await this.owned(r))?.powerState !== "off")
               fail(
                 "server_not_off",
-                "Snapshot requires confirmed graceful shutdown.",
+                "Snapshot requires freshly confirmed provider OFF.",
               );
             r = await this.attempted(id);
             image = (

@@ -3,12 +3,13 @@
 Accepted for the candidate Linux implementation, 2026-11-18. Live provider and
 remote-agent conformance remain pending.
 
-Subsequent authorized live evidence leaves a specific provider gate open:
-guest-only graceful shutdown did not produce provider OFF. Separately authorized
-exact provider Stop (`/halt`) reconciliations were required. Native guest Herdr
-does not correct that behavior, and this transport decision adds no automatic
-provider fallback or mutation retry. Full lifecycle conformance must not be
-inferred from guest transport, authentication or allocated-resume proofs.
+Authorized live evidence showed that guest shutdown acknowledgement did not
+produce provider OFF; separately authorized exact provider Stop (`/halt`)
+reconciliations were required. The normal Stop and Hibernate path now uses one
+provider Stop after application quiesce and a durable source checkpoint. Local
+tests cover the correction; its live verification and the full fresh-worker
+native lifecycle remain pending. Transport and authentication proofs do not
+establish lifecycle conformance.
 
 ## Decision and evidence
 
@@ -71,8 +72,8 @@ an authenticated unattended first connection. Pins never transfer from old
 instances to restores. Strict checking and no forwarding apply on every attempt.
 
 Before cloning, quiesce services and the agent, capture durable source/checkpoint
-outside the worktree, clear cloud-init's per-instance cache, and shut down
-cleanly. A restore gets new user-data and a fresh pin, then verifies persisted
+outside the worktree, clear and flush cloud-init's per-instance cache, and submit
+provider Stop. Fresh observed provider OFF is required before a snapshot. A restore gets new user-data and a fresh pin, then verifies persisted
 worker identity, checkpoint/source digest, agent auth and service restart hooks.
 If Vultr or cloud-init does not apply the expected key, strict SSH fails closed;
 no stale-key fallback occurs. Real snapshot restore onboarding remains a pending
@@ -87,7 +88,7 @@ commands are trusted operator root code, not an isolation mechanism.
 ## Operations, identity and recovery
 
 Persist intent before every external mutation. Vultr's create returns an
-instance, and start/delete return acknowledgements, without action IDs. Exact
+instance, and Start/Stop/delete return acknowledgements, without action IDs. Exact
 instance operation tags and snapshot descriptions let an unknown create or
 snapshot reconcile without duplicate POST. Power and deletion reconcile only
 observed target state; missing/unobservable state retains the receipt and
@@ -112,9 +113,17 @@ then requires a new source approval. Snapshot/pin identities do not imply worker
 identity. An operation is not complete because a pane closed or a transport
 failed. Host checkout/index state is never cloud deletion authority.
 
-Use a pinned guest shutdown after quiesce/checkpoint, then confirm Vultr power
-state. Do not call force halt and describe it as graceful. Start is sent only
-for a confirmed stopped instance because it may restart one already running.
+After graceful application/agent quiesce and a flushed durable checkpoint, submit
+one exact `POST /instances/{instance-id}/halt` without a body, as defined by the
+pinned official SDK. Vultr documents this as provider Stop; the contract does not
+establish its guest OS shutdown behavior. Persist the exact instance, provider
+operation, intent and attempt before submission, then acknowledgement separately
+from observed OFF. Unknown requests, lost acknowledgement writes and failed
+observations never authorize replay. Historical guest-shutdown receipts retain
+their original meaning and can only settle by observing their target state;
+they cannot authorize a new provider Stop. Recheck ownership and attached blocks
+before first submission. Start is sent only for a confirmed stopped instance
+because it may restart one already running.
 Hibernation requires completed exact-operation snapshot and the durable
 checkpoint before a separate exact-instance-and-snapshot release approval.
 Cancellation or failure keeps the off, billed instance and previous snapshot.
@@ -141,7 +150,8 @@ dedicated guest and root account; no multi-tenant security claim is made.
 ## Consequences and rejected alternatives
 
 Reject TOFU/disabled host checking, borrowed host agent auth, Hetzner-shaped API
-emulation, forced-shutdown hibernation, blind POST retries, silent rebuild,
+emulation, snapshots without application quiesce/checkpoint and observed OFF,
+blind POST retries, silent rebuild,
 automatic snapshot deletion, and focused-pane inference. Keep a persistent local
 dashboard separate from SSH/agent/compute lifetimes. New logical workers use pinned stock guest Herdr 0.9.5 and persist actual
 workspace/pane/terminal IDs and detected agent observations. Missing backend
