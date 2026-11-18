@@ -30,9 +30,9 @@ It is neither a live provider test nor an authenticated coding-agent trial.
 | Built-in/custom agent adapters                                  | `adapters`, `remote` tests                                                            | Codex 0.169.0, Claude 2.1.220, OpenCode 1.18.9 candidates; independent remote auth; no borrowed host login                                                                                                                                  |
 | Public Compound installation                                    | Pinned installer and modern profile tests; opt-in `test:codex-bootstrap`              | Public native plugin only; account sync/owner login separate; no private host skill/profile copying                                                                                                                                         |
 | Asynchronous create receipts                                    | `host-identity`, `provider` tests                                                     | Exact tags/cursor inventory; no action IDs; unknown or ambiguous match never repeats POST                                                                                                                                                   |
-| Power-off/resume                                                | `lifecycle`, `connections` tests                                                      | Exact provider Stop after quiesce/checkpoint, fresh observed OFF; still billed; Start never sent to running/transitioning instance                                                                                                          |
-| Snapshot hibernation/release                                    | `lifecycle` tests                                                                     | Exact operation description, `complete` status, size/OS/checkpoint gates and exact deletion approval; no image labels/action IDs                                                                                                            |
-| Snapshot restore                                                | Fresh pin in `host-identity`; source/auth/service gates in `remote`                   | New instance/IP; same frozen plan/disk; no API architecture field; actual cloud-init clone/restore pending                                                                                                                                  |
+| Power-off/resume                                                | `lifecycle`, `connections` tests                                                      | Normal Stop and same-instance Resume verified on the legacy worker after quiesce/checkpoint; fresh provider OFF; still billed; fresh native lifecycle pending                                                                               |
+| Snapshot hibernation/release                                    | `lifecycle` tests                                                                     | Legacy Hibernate, complete image and exact approved release verified; exact operation description/size/OS/checkpoint gates; native lifecycle pending                                                                                        |
+| Snapshot restore                                                | Fresh pin in `host-identity`; source/auth/service gates in `remote`                   | Legacy retained-image restore verified with a new instance/IP and exact source/checkpoint/auth readback; same frozen plan/disk; no API architecture field; fresh native restore pending                                                     |
 | Unknown outcomes and recovery                                   | `lifecycle`, `worker-runtime`, `control` tests                                        | Receipt persisted before mutation; definitive rejections allow the next explicit retry, uncertain outcomes never replay; SSH deadlines bound hangs                                                                                          |
 | Status/list/info                                                | `actions`, `mappings`, `lifecycle` tests                                              | No compute start; pending receipts, blocks and allocation/storage billing visible                                                                                                                                                           |
 | Explicit Delete/Replace/Forget                                  | `lifecycle`, `mappings`, `worker-runtime` tests                                       | Exact-target approvals; mappings retained until confirmed deletion; snapshots/recovery metadata retained                                                                                                                                    |
@@ -49,15 +49,16 @@ fresh-worker native lifecycle receipt. Snapshot release/restore requires its own
 exact approvals and observations. Nothing in the synthetic suite substitutes for
 those gates.
 
-**Live provider Stop verification remains open.** Guest-only shutdown did not
-establish provider OFF in the earlier live trial; separately authorized exact
-`/halt` reconciliations were needed. Normal Stop/Hibernate now submit that exact
-provider operation after application quiesce and a durable checkpoint, with
-persisted intent/acknowledgement and no uncertain-outcome replay. Local fixtures
-keep guest SSH acknowledgement separate from provider power. This correction
-still needs its own authorized live trial; it does not establish full native
-lifecycle or snapshot restore conformance. See
-[the recorded verification limits](verification.md#live-provider-stop-gate).
+**Normal provider Stop is verified for the legacy backend.** The bounded
+2026-11-18 follow-up used exact tested commit `518332f` (tree matches merged
+`fddb2c0`). Normal Stop and Hibernate reached actual provider OFF without manual
+`/halt` reconciliation. Same-instance Resume and retained legacy image restore
+preserved the synthetic source, checkpoint and independent guest authentication.
+Both disposable instances were subsequently deleted through exact approved normal
+lifecycle gates; the two complete recovery images were retained. This closes the
+provider Stop gate for that trial, while fresh native guest-Herdr lifecycle and
+native snapshot restore remain unproven. See
+[the exact legacy observations and receipt references](verification.md#live-provider-stop-gate).
 
 Native guest runtime uses the pinned public 0.9.5 release, with architecture-specific
 SHA256 verification before installation. `src/guest-herdr.mjs` is deployed into the

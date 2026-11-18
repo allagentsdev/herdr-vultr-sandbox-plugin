@@ -669,6 +669,7 @@ test("opened receipts identify the exact Herdr pane and queued receipts retain t
     localRoot: temporary(t),
     config: {},
   });
+  const requestId = randomUUID();
   const queued = await runAction(
     "reconnect",
     { worker: id },
@@ -677,10 +678,59 @@ test("opened receipts identify the exact Herdr pane and queued receipts retain t
       requestWorker: async () => ({
         status: "queued",
         paneId: "w1:p9",
-        requestId: "request-123",
+        requestId,
       }),
       focusPane: () => {},
     },
   );
-  assert.equal(queued.requestId, "request-123");
+  assert.equal(queued.requestId, requestId);
+});
+
+test("public action retains the submitted UUID for a status-only queued socket reply without reopening or replay", async (t) => {
+  const net = await import("node:net");
+  const { randomUUID } = await import("node:crypto");
+  const { namespace } = await import("../src/state.mjs");
+  const store = new Store(temporary(t)),
+    env = { HERDR_PANE_ID: "w1:p1" },
+    id = randomUUID();
+  await store.create({
+    id,
+    namespace: namespace(env),
+    sourcePaneId: "w1:p1",
+    localRoot: temporary(t),
+    config: {},
+  });
+  let submitted,
+    calls = 0;
+  const server = net.createServer((socket) => {
+    socket.on("data", (chunk) => {
+      calls++;
+      submitted = JSON.parse(String(chunk));
+      socket.end(JSON.stringify({ status: "queued", paneId: "w1:p2" }) + "\n");
+    });
+  });
+  await new Promise((resolve) =>
+    server.listen(path.join(store.artifacts(id), "control.sock"), resolve),
+  );
+  try {
+    const result = await runAction(
+      "stop",
+      { worker: id },
+      {
+        store,
+        env,
+        context: { focused_pane_id: "w1:p1" },
+        openPane: () =>
+          assert.fail("Malformed queued reply cannot reopen a dashboard"),
+        focusPane: () => {},
+      },
+    );
+    assert.equal(result.status, "outcome_unknown");
+    assert.equal(result.workerId, id);
+    assert.match(result.requestId, /^[0-9a-f-]{36}$/);
+    assert.equal(result.requestId, submitted.requestId);
+    assert.equal(calls, 1);
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
 });

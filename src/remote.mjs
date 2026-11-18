@@ -161,7 +161,8 @@ export class Remote {
       try {
         this.command(r, "true", { timeout: 20000 });
         return;
-      } catch {
+      } catch (error) {
+        if (error?.code === "command_timeout") throw error;
         if (i + 1 < attempts) await delay(interval);
       }
     }
@@ -269,7 +270,8 @@ export class Remote {
     if (!command) return { status: "cli-managed", verified: false };
     try {
       this.command(r, `cd ${q(source)} && ${command}`);
-    } catch {
+    } catch (error) {
+      if (error?.code === "command_timeout") throw error;
       throw new PluginError(
         "auth_required",
         "Remote agent login is required. Choose Login; host coding-agent credentials are never copied.",

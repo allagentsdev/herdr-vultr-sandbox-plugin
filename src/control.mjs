@@ -1,8 +1,11 @@
 import fs from "node:fs";
 import path from "node:path";
 import net from "node:net";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { PluginError } from "./result.mjs";
+const validRequestId = (value) =>
+  typeof value === "string" &&
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value);
 const socketPath = (store, id) => {
   const direct = path.join(store.artifacts(id), "control.sock");
   if (Buffer.byteLength(direct) < 96) return direct;
@@ -30,31 +33,47 @@ export function requestWorker(
   action = "ping",
   { timeout = 1500 } = {},
 ) {
+  const requestId = action === "ping" ? undefined : randomUUID();
   return new Promise((resolve) => {
     const socket = net.createConnection(socketPath(store, id));
     let text = "",
-      settled = false;
+      settled = false,
+      sent = false;
     const finish = (result) => {
       if (settled) return;
       settled = true;
       socket.destroy();
       resolve(result);
     };
-    socket.setTimeout(timeout, () => finish(null));
-    socket.on("error", () => finish(null));
-    socket.on("end", () => finish(null));
-    socket.on("close", () => finish(null));
-    socket.on("connect", () =>
-      socket.write(JSON.stringify({ workerId: id, action }) + "\n"),
-    );
+    const uncertain = () =>
+      finish(
+        sent && requestId ? { status: "outcome_unknown", requestId } : null,
+      );
+    socket.setTimeout(timeout, uncertain);
+    socket.on("error", uncertain);
+    socket.on("end", uncertain);
+    socket.on("close", uncertain);
+    socket.on("connect", () => {
+      sent = true;
+      socket.write(JSON.stringify({ workerId: id, action, requestId }) + "\n");
+    });
     socket.on("data", (chunk) => {
       text += chunk;
-      if (text.length > 8192) return finish(null);
+      if (text.length > 8192) return uncertain();
       if (text.includes("\n")) {
         try {
-          finish(JSON.parse(text.split("\n")[0]));
+          const result = JSON.parse(text.split("\n")[0]);
+          if (
+            !result ||
+            Array.isArray(result) ||
+            typeof result.status !== "string" ||
+            !result.status ||
+            (result.status === "queued" && !validRequestId(result.requestId))
+          )
+            return uncertain();
+          finish(result);
         } catch {
-          finish(null);
+          uncertain();
         }
       }
     });
@@ -104,7 +123,12 @@ export async function serveWorker(store, id, handler) {
           try {
             const request = JSON.parse(text.split("\n")[0]);
             if (request.workerId !== id) throw Error();
-            result = await handler(request.action);
+            if (
+              request.requestId !== undefined &&
+              !validRequestId(request.requestId)
+            )
+              throw Error();
+            result = await handler(request.action, request.requestId);
           } catch {
             result = { status: "invalid_request" };
           }

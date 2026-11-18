@@ -10,9 +10,10 @@ test("private worker owner survives transport work, rejects duplicate owner and 
   const store = new Store(temporary(t)),
     id = randomUUID();
   let busy = true;
-  const close = await serveWorker(store, id, (action) => ({
+  const close = await serveWorker(store, id, (action, requestId) => ({
     status: action === "ping" ? "alive" : busy ? "attached" : "queued",
     paneId: "w1:p2",
+    requestId,
   }));
   assert.equal(
     fs.statSync(path.join(store.artifacts(id), "control.sock")).mode & 0o777,
@@ -82,27 +83,137 @@ test("a synchronous busy owner retains its lease; only process exit permits recl
   await successor();
 });
 
-test("clean and truncated owner replies settle instead of hanging action dispatch", async (t) => {
+test("lost and malformed owner replies preserve submitted request correlation", async (t) => {
   const net = await import("node:net");
-  for (const reply of ["", '{"status":"partial"']) {
-    const store = new Store(temporary(t)),
-      id = randomUUID(),
-      file = path.join(store.artifacts(id), "control.sock");
-    const server = net.createServer((socket) => {
-      socket.on("data", () => socket.end(reply));
+  const replies = [
+    "",
+    '{"status":"partial"',
+    "invalid\n",
+    "x".repeat(8193),
+    "null\n",
+    "[]\n",
+    "{}\n",
+    '{"status":42}\n',
+    "destroy",
+    '{"status":"queued"}\n',
+    '{"status":"queued","requestId":null}\n',
+    '{"status":"queued","requestId":42}\n',
+    '{"status":"queued","requestId":"invalid"}\n',
+    '{"status":"queued","requestId":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}\n',
+  ];
+  for (const [index, reply] of replies.entries())
+    await t.test(String(index), async (t) => {
+      const store = new Store(temporary(t)),
+        id = randomUUID();
+      let submitted;
+      const server = net.createServer((socket) => {
+        socket.on("data", (chunk) => {
+          submitted = JSON.parse(String(chunk));
+          if (reply === "destroy") socket.destroy();
+          else socket.end(reply);
+        });
+      });
+      await new Promise((resolve) =>
+        server.listen(path.join(store.artifacts(id), "control.sock"), resolve),
+      );
+      try {
+        const result = await requestWorker(store, id, "stop", { timeout: 40 });
+        assert.equal(result?.status, "outcome_unknown");
+        assert.match(
+          submitted.requestId,
+          /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/,
+        );
+        assert.equal(result.requestId, submitted.requestId);
+        assert.equal(
+          await requestWorker(store, id, "ping", { timeout: 40 }),
+          null,
+        );
+      } finally {
+        await new Promise((resolve) => server.close(resolve));
+      }
+      assert.equal(
+        await requestWorker(store, id, "stop", { timeout: 40 }),
+        null,
+      );
     });
-    await new Promise((resolve) => server.listen(file, resolve));
-    const timeout = new Promise((_, reject) => {
-      const timer = setTimeout(() => reject(Error("IPC did not settle")), 300);
-      timer.unref();
+});
+
+test("private control refuses malformed client UUIDs before its handler and accepts legacy requests", async (t) => {
+  const net = await import("node:net"),
+    store = new Store(temporary(t)),
+    id = randomUUID();
+  let calls = 0;
+  const close = await serveWorker(
+    store,
+    id,
+    (_action, requestId = randomUUID()) => {
+      calls++;
+      return { status: "queued", requestId };
+    },
+  );
+  const send = (requestId) =>
+    new Promise((resolve, reject) => {
+      const socket = net.createConnection(
+        path.join(store.artifacts(id), "control.sock"),
+      );
+      let output = "";
+      socket.on("error", reject);
+      socket.on("connect", () =>
+        socket.write(
+          JSON.stringify({ workerId: id, action: "stop", requestId }) + "\n",
+        ),
+      );
+      socket.on("data", (chunk) => {
+        output += chunk;
+      });
+      socket.on("end", () => resolve(JSON.parse(output)));
     });
-    assert.equal(
-      await Promise.race([
-        requestWorker(store, id, "ping", { timeout: 40 }),
-        timeout,
-      ]),
-      null,
-    );
-    await new Promise((resolve) => server.close(resolve));
+  try {
+    for (const requestId of ["bad", 42, null, "a".repeat(500), "a".repeat(36)])
+      assert.equal((await send(requestId)).status, "invalid_request");
+    assert.equal(calls, 0);
+    assert.equal((await send(undefined)).status, "queued");
+    assert.equal((await send(randomUUID())).status, "queued");
+    assert.equal(calls, 2);
+  } finally {
+    await close();
+  }
+});
+
+test("private control correlates an asynchronous accepted reply with the client UUID", async (t) => {
+  const store = new Store(temporary(t)),
+    id = randomUUID();
+  let receivedId;
+  const close = await serveWorker(store, id, async (_action, requestId) => {
+    receivedId = requestId;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    return { status: "queued", requestId };
+  });
+  try {
+    const result = await requestWorker(store, id, "stop");
+    assert.match(receivedId, /^[0-9a-f-]{36}$/);
+    assert.equal(result.status, "queued");
+    assert.equal(result.requestId, receivedId);
+  } finally {
+    await close();
+  }
+});
+
+test("private control accepts a valid different UUID from a legacy queued owner", async (t) => {
+  const store = new Store(temporary(t)),
+    id = randomUUID(),
+    legacyId = randomUUID().toUpperCase();
+  let submittedId;
+  const close = await serveWorker(store, id, (_action, requestId) => {
+    submittedId = requestId;
+    return { status: "queued", requestId: legacyId };
+  });
+  try {
+    const result = await requestWorker(store, id, "stop");
+    assert.equal(result.status, "queued");
+    assert.equal(result.requestId, legacyId);
+    assert.notEqual(result.requestId.toLowerCase(), submittedId);
+  } finally {
+    await close();
   }
 });

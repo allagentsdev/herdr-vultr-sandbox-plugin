@@ -80,11 +80,20 @@ not that remote setup completed. The receipt includes the exact new `paneId`. `l
 observations; they do not start compute. Explicit UUID selection resolves an
 ambiguous mapping. A live busy owner returns `busy` rather than typing into its
 agent. A private socket and process-lifetime lease retain one dashboard owner.
-Accepted dashboard requests return a `requestId`; `info` exposes the latest 20
-`controlRequests` with queued/running/completed/failed/cancelled/interrupted
-status and a safe code. Poll that exact request ID. An interrupted request is
-never automatically replayed. A completed reconnect means its handler returned;
-consult transport/provider state for the remote process and allocation.
+Dashboard requests carry a client-generated `requestId` before submission.
+Accepted requests return `queued`; a lost, timed-out or malformed reply after
+submission returns `outcome_unknown` with that same ID. This does not cancel the
+handler or prove whether it accepted the request. Before any retry, use `info`
+to reconcile that exact ID in the latest 20 `controlRequests`, which record
+queued/running/completed/failed/cancelled/interrupted status and a safe code.
+A missing or evicted receipt is not proof of rejection and never authorizes a
+resend. Observe the dashboard and remote/provider state if acceptance remains
+uncertain. Older running dashboards may ignore the client ID; restart or upgrade
+the owner only after inspecting its outstanding work, and do not infer rejection
+from a missing matching receipt. IDs provide correlation, not RPC deduplication
+or exactly-once execution. Requests are never automatically replayed. A completed
+reconnect means its handler returned; consult transport/provider state for the
+remote process and allocation.
 
 `herdr plugin action invoke ACTION --plugin vultr.sandbox` uses the focused pane
 of its selected Herdr session. Before running it from a background terminal, use
@@ -126,7 +135,9 @@ SSH configuration, no SSH agent and no forwarding. New boxes need no console or
 fingerprint ritual. A bounded pinned readiness wait handles boot delay without
 weakening trust. Noninteractive SSH commands have a five-minute deadline
 (with shorter readiness probes) and server-alive checks; a timeout may leave a
-remote command applied and never grants blind lifecycle replay. Interactive
+remote command applied and never grants blind lifecycle replay. Readiness and
+authentication checks preserve `command_timeout`; it does not imply missing
+credentials or authorize Login. Interactive
 owner login and agent attachments have a separate lifetime. If provisioning does not apply the expected key, the connection
 fails closed. `pin-host` is an explicit console-verified recovery surface for a
 missing saved pin; it does not replace an existing provisioned pin.

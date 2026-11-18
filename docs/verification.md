@@ -104,8 +104,8 @@ Separate actual guest Herdr/Codex and helper process proofs do not establish the
 complete fresh-worker native Herdr lifecycle or snapshot restore. The exact
 reviewed recovery image completed, and normal exact-target release removed the
 disposable instance while retaining that authenticated image. Provider inventory
-confirmed no residual instance, block or reserved IP. Snapshot restore remains
-untested.
+confirmed no residual instance, block or reserved IP. The follow-up below also
+verified legacy retained-image restore; native snapshot restore remains untested.
 
 ## Live provider Stop gate
 
@@ -155,12 +155,54 @@ post-rename directory-sync failure retains an attempted receipt and prevents
 replay. This checks the actual persistence protocol and failure gating. No host
 power loss, hardware durability experiment or live provider operation is implied.
 
-These are local synthetic boundary proofs. The correction still needs an
-authorized live trial. A retained legacy image restore can verify its own
-provider/source/auth behavior but cannot establish native conformance. A separate
-fresh native logical worker needs independent source approval, home, login and
-trust; native snapshot restore remains untested. Private raw live receipts,
-exact IDs and cleanup decisions remain outside the repository.
+The boundary tests above are local synthetic evidence. The subsequent bounded
+2026-11-18 live follow-up exercised exact tested commit
+`518332fc932a8f4e8d096d0a0bf1599ae1ad474c`, whose tree matches merged
+`fddb2c09c5cb823eab65b1d43b8c32cf70e6de05`. It used legacy tmux logical worker
+`23e22bfd-a785-4208-a679-8dddf47f8801`, not a fresh native worker.
+
+- Normal Stop of `c319e036-2ab4-429d-a0ad-b849be308e63` checkpointed at
+  04:37:32.245Z and freshly observed provider `stopped/ok` at 04:37:37.538Z.
+  Control request `8f44d9ec-6eef-4e4c-bde0-e1b1fc114ec5` completed; exact power
+  operation `2c905a3e-b939-40e4-86d2-d49e0d666820` has distinct attempt and
+  acknowledgement receipts. No manual provider reconciliation was used.
+- Allocated Resume preserved that exact instance/IP, checkpoint, all four source
+  hashes and authenticated guest state, with a new boot. Normal Hibernate then
+  observed provider OFF and created complete image
+  `d498987f-21c9-4b8b-aeeb-f270c78be2e9`, operation
+  `771409a3-3211-41fa-a2e9-72ec3f73ac69`. Normal Recover reconciled the known
+  image without another create, followed by exact approved release.
+- Restoring retained legacy images was observed: original
+  `f053bd82-c252-45e6-92e1-bacf267926d3` to the first instance, then `d498...`
+  to `a5f5ce1b-d6d6-492a-8121-d95b2faa6218`. Source digest
+  `441f4d8b6396a4d0fe433fac036bafead2673200872dcdc9b9d3d759c6686cb9`,
+  all four source file hashes, checkpoint and authentication status matched.
+  Both images remained complete, OS 2284, size 59055800320 bytes.
+- The second allocation resulted from an invocation mistake: Start was typed in
+  a new source pane while the legacy dashboard was selected. The stock action
+  CLI used its actual focused context, recorded in plugin-log-14. The invoker
+  had not selected the intended workspace; no stock/core/plugin defect was
+  established. The proposed native fixture was never approved or uploaded.
+- Both instances were normally stopped and deleted through exact-target reviewed
+  approvals before the 05:28:30Z trial target. Final 05:18:25Z inventory contained
+  no instances, blocks or reserved IPs. Both recovery images were retained;
+  images remain sensitive authenticated state and separately billable storage.
+
+Private evidence remains outside Git under the run label
+`provider-stop-followup-20261118`. Receipt references are
+`legacy-normal-stop-proof.json`, `legacy-allocated-resume-proof.json`,
+`final-operation-receipts.json`, `provider-1794978095527.json` (first instance
+absence), `provider-1794979100540.json` (second absence), and
+`preflight-1794979105491.json` (final empty inventories and retained images).
+The earlier guest-only Stop discrepancy and separately authorized reconciliation
+remain historical evidence; they are not presented as success of the old code.
+
+These observations establish legacy provider/source/auth recovery only. They do
+not establish fresh native guest-Herdr cloud creation, prompt/wait, lifecycle or
+snapshot restore, or blanket DX parity. A separate fresh native worker still
+needs independent source approval, home, login and trust. No credentials or
+private authentication logs are included here, and no additional cloud retest
+was performed for this documentation update.
 
 `test:guest-herdr` also requires Python 3 for its controlling-PTY driver. It starts
 only owned isolated stock Herdr servers through the
