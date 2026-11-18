@@ -50,6 +50,12 @@ the same current quiescent checkpoint and clone preparation before Halt, allowin
 later release of the OFF instance without powering it on. Disabled-policy Stop
 keeps its existing behavior. Resume retires old Hibernate authority before any
 power-on or already-running settlement, including failed restart-hook writers.
+After Stop has no pending receipt, exact-worker Disable can revoke recurring
+release and retire its shutdown-stage Hibernate authority in one durable update.
+The latest checkpoint remains as `powerCheckpoint` for observation, without
+authorizing release; the stopped instance and previous snapshot remain unchanged.
+Pending receipts and snapshot, release or unknown Hibernate stages still block
+Disable.
 
 Attempt, acknowledgement and observation receipts remain separate. Unknown
 create, power, snapshot or delete results never authorize duplicate mutation.

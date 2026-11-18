@@ -47,12 +47,17 @@ export class Lifecycle {
       );
     return this.store.withLock(id, async () => {
       const r = this.store.get(id);
-      if (r.pending || r.hibernate)
+      if (r.pending || (r.hibernate && r.hibernate.stage !== "shutdown"))
         fail(
           "operation_pending",
           "Finish the retained operation before disabling expiry.",
         );
-      return this.store.update(id, (v) => ({ ...v, expiry: null }));
+      return this.store.update(id, (v) => ({
+        ...v,
+        expiry: null,
+        hibernate: null,
+        powerCheckpoint: v.hibernate?.checkpoint ?? v.powerCheckpoint,
+      }));
     });
   }
   async extendExpiry(id, minutes) {

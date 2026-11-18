@@ -5,6 +5,138 @@ import { Store } from "../src/state.mjs";
 import { Lifecycle } from "../src/lifecycle.mjs";
 import { idleWorker } from "./fixtures/idle-worker.mjs";
 
+test("exact Disable after consented normal Stop retains OFF compute and latest checkpoint while revoking release", async (t) => {
+  const f = await idleWorker(t);
+  const oldCheckpoint = {
+    workerId: f.id,
+    sourceDigest: "a".repeat(64),
+    currentSourceDigest: "c".repeat(64),
+    at: "2026-11-17T00:00:00.000Z",
+  };
+  await f.store.update(f.id, (r) => ({
+    ...r,
+    snapshot: { ...r.snapshot, checkpoint: oldCheckpoint },
+  }));
+  const oldSnapshotBytes = JSON.stringify(f.store.get(f.id).snapshot);
+  await f.life.power(f.id, "shutdown");
+  const stopped = f.store.get(f.id),
+    oldSession = stopped.expiry.session;
+  assert.equal((await f.api.getServer()).powerState, "off");
+  assert.equal(stopped.pending, null);
+  assert.equal(stopped.hibernate.stage, "shutdown");
+  assert.notDeepEqual(stopped.hibernate.checkpoint, oldCheckpoint);
+  const stoppedBytes = JSON.stringify(stopped),
+    callsBefore = f.calls.length;
+  await assert.rejects(
+    f.life.disableExpiry(f.id, `DISABLE AUTO-HIBERNATE ${randomUUID()}`),
+    { code: "approval_required" },
+  );
+  assert.equal(JSON.stringify(f.store.get(f.id)), stoppedBytes);
+  const update = f.store.update.bind(f.store);
+  f.store.update = (id, fn) =>
+    update(id, (record) => {
+      const next = fn(record);
+      if (record.hibernate && next.hibernate === null)
+        assert.equal(
+          next.expiry,
+          null,
+          "retiring Hibernate authority also revokes policy in the same durable update",
+        );
+      if (record.expiry && next.expiry === null) {
+        assert.equal(
+          next.hibernate,
+          null,
+          "revocation retires Hibernate authority in the same durable update",
+        );
+        assert.deepEqual(next.powerCheckpoint, stopped.hibernate.checkpoint);
+      }
+      return next;
+    });
+  await f.life.disableExpiry(f.id, `DISABLE AUTO-HIBERNATE ${f.id}`);
+  const disabled = f.store.get(f.id);
+  assert.equal(disabled.expiry, null);
+  assert.equal(disabled.hibernate, null);
+  assert.deepEqual(disabled.vm, stopped.vm);
+  assert.deepEqual(disabled.powerCheckpoint, stopped.hibernate.checkpoint);
+  assert.equal(JSON.stringify(disabled.snapshot), oldSnapshotBytes);
+  assert.equal((await f.api.getServer()).powerState, "off");
+  const disabledBytes = JSON.stringify(disabled);
+  await f.life.expire(f.id, oldSession.id, f.now + 1e9);
+  assert.equal(JSON.stringify(f.store.get(f.id)), disabledBytes);
+  await assert.rejects(
+    f.life.release(f.id, `DELETE ${f.serverId} SNAPSHOT ${f.oldImageId}`),
+    { code: "approval_required" },
+  );
+  assert.equal(JSON.stringify(f.store.get(f.id)), disabledBytes);
+  assert.equal(f.calls.length, callsBefore);
+});
+
+test("Disable preserves pending receipts and snapshot, release or unknown Hibernate stages", async (t) => {
+  for (const condition of [
+    "pending-unattempted",
+    "pending-unknown",
+    "pending-acknowledged",
+    "snapshot",
+    "release",
+    "unknown",
+    "missing-stage",
+  ]) {
+    const f = await idleWorker(t);
+    await f.life.power(f.id, "shutdown");
+    await f.store.update(f.id, (r) => ({
+      ...r,
+      ...(condition.startsWith("pending-")
+        ? {
+            pending: {
+              kind: "shutdown",
+              serverId: f.serverId,
+              attempted: condition !== "pending-unattempted",
+              acknowledged: condition === "pending-acknowledged",
+            },
+          }
+        : {
+            hibernate: {
+              checkpoint: r.hibernate.checkpoint,
+              ...(condition === "missing-stage" ? {} : { stage: condition }),
+            },
+          }),
+    }));
+    const before = JSON.stringify(f.store.get(f.id)),
+      count = f.calls.length;
+    await assert.rejects(
+      f.life.disableExpiry(f.id, `DISABLE AUTO-HIBERNATE ${f.id}`),
+      { code: "operation_pending" },
+    );
+    assert.equal(JSON.stringify(f.store.get(f.id)), before);
+    assert.equal(f.calls.length, count);
+    assert.equal((await f.api.getServer()).powerState, "off");
+  }
+});
+
+test("Disable without Hibernate works with an enabled or already disabled policy", async (t) => {
+  const f = await idleWorker(t),
+    vm = f.store.get(f.id).vm;
+  for (let i = 0; i < 2; i++) {
+    await f.life.disableExpiry(f.id, `DISABLE AUTO-HIBERNATE ${f.id}`);
+    assert.equal(f.store.get(f.id).expiry, null);
+    assert.deepEqual(f.store.get(f.id).vm, vm);
+    assert.equal(f.calls.length, 0);
+  }
+});
+
+test("Disable retains the latest shutdown checkpoint when an older power checkpoint is present", async (t) => {
+  const f = await idleWorker(t);
+  await f.life.power(f.id, "shutdown");
+  const latest = f.store.get(f.id).hibernate.checkpoint;
+  await f.store.update(f.id, (r) => ({
+    ...r,
+    powerCheckpoint: { ...latest, currentSourceDigest: "e".repeat(64) },
+  }));
+  await f.life.disableExpiry(f.id, `DISABLE AUTO-HIBERNATE ${f.id}`);
+  assert.deepEqual(f.store.get(f.id).powerCheckpoint, latest);
+  assert.equal(f.store.get(f.id).hibernate, null);
+});
+
 test("recurring consent is exact-worker and only the 15 minute idle policy is accepted", async (t) => {
   const f = await idleWorker(t);
   await f.life.disableExpiry(f.id, `DISABLE AUTO-HIBERNATE ${f.id}`);

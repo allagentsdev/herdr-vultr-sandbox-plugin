@@ -99,6 +99,68 @@ test("activity is rechecked immediately before automatic quiesce", async (t) => 
   assert.equal(f.calls.length, 0);
   assert.equal(f.store.get(f.id).expiry.session.activityState, "working");
 });
+
+test("an idle token change at the final recheck restarts the idle window without quiesce or release", async (t) => {
+  const f = await fixture(t);
+  await f.poll();
+  await f.tick(14);
+  let checks = 0;
+  f.remote.activity = async () => ({
+    state: "idle",
+    token: ++checks === 1 ? "turn-1" : "turn-2",
+  });
+  await f.tick(1);
+  const session = f.store.get(f.id).expiry.session;
+  assert.equal(session.activityState, "idle");
+  assert.equal(session.activityToken, "turn-2");
+  assert.equal(session.idleSince, new Date(f.now).toISOString());
+  assert.equal(session.expiresAt, new Date(f.now + 15 * 60000).toISOString());
+  assert.equal(session.releaseAuthorized, false);
+  assert.equal(f.store.get(f.id).vm.serverId, f.serverId);
+  assert.deepEqual(f.calls, []);
+  await f.tick(14);
+  assert.deepEqual(f.calls, []);
+  await f.tick(1);
+  assert.equal(f.store.get(f.id).vm, null);
+});
+
+test("a reversed observation clock restarts confirmed idle instead of retaining the previous window", async (t) => {
+  const f = await fixture(t);
+  await f.poll();
+  await f.tick(10);
+  const previous = f.store.get(f.id).expiry.session;
+  f.now -= 60000;
+  await f.poll();
+  const reset = f.store.get(f.id).expiry.session;
+  assert.notEqual(reset.idleSince, previous.idleSince);
+  assert.equal(reset.idleSince, new Date(f.now).toISOString());
+  assert.equal(reset.lastObservedAt, reset.idleSince);
+  assert.equal(reset.expiresAt, new Date(f.now + 15 * 60000).toISOString());
+  assert.deepEqual(f.calls, []);
+});
+
+test("exactly 90 seconds preserves continuous idle while 90 seconds plus one millisecond resets it", async (t) => {
+  for (const gap of [90000, 90001]) {
+    const f = await fixture(t);
+    await f.poll();
+    await f.tick(10);
+    const previous = f.store.get(f.id).expiry.session;
+    f.now += gap;
+    await f.poll();
+    const current = f.store.get(f.id).expiry.session;
+    assert.equal(
+      current.idleSince,
+      gap === 90000 ? previous.idleSince : new Date(f.now).toISOString(),
+    );
+    assert.equal(
+      current.expiresAt,
+      gap === 90000
+        ? previous.expiresAt
+        : new Date(f.now + 15 * 60000).toISOString(),
+    );
+    assert.deepEqual(f.calls, []);
+  }
+});
 test("restart cannot count an unobserved offline interval as idle", async (t) => {
   const f = await fixture(t);
   await f.poll();
