@@ -5,6 +5,7 @@ import { namespace } from "./state.mjs";
 import { resolveGitContext } from "./context.mjs";
 import { resolveAdapter, adapterCommands, recordAdapter } from "./adapters.mjs";
 import { PluginError } from "./result.mjs";
+import { guestBackend } from "./guest-herdr.mjs";
 const fail = (code, message) => {
   throw new PluginError(code, message);
 };
@@ -68,6 +69,7 @@ export async function newWorker(
     vm: null,
     snapshot: null,
     pending: null,
+    guestBackend: "herdr",
     agentAdapter: structuredClone(adapter),
     config: { ...structuredClone(config), adapter: adapterCommands(adapter) },
   });
@@ -146,6 +148,8 @@ export function workerInfo(r) {
     previousServerId: r.previousVm?.serverId ?? null,
     snapshotId: r.snapshot?.imageId ?? null,
     previousSnapshotId: r.snapshot?.previousImageId ?? null,
+    guestBackend: guestBackend(r),
+    guestHerdr: r.guestHerdr ?? null,
     agentKind: a.kind,
     expectedVersion: a.version ?? null,
     installedVersion: r.agentRuntime?.installedVersion ?? null,

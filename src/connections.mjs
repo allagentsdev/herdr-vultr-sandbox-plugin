@@ -44,6 +44,8 @@ export class Connections {
           phase: "login-required",
         }));
       }
+      const resumeApproved =
+        r.phase === "restore-verification" || mode === "resume";
       if (r.phase === "restore-verification") await this.remote.verifyResume(r);
       else if (mode === "resume") await this.remote.activate(r);
       else await this.remote.auth(r);
@@ -52,8 +54,14 @@ export class Connections {
         phase: "ready",
         hibernate: null,
       }));
-      await this.remote.ensureWorker(r);
-      if (mode === "restart-agent") await this.remote.restartAgent(r);
+      let observed = await this.remote.ensureWorker(r, { resumeApproved });
+      if (mode === "restart-agent")
+        observed = await this.remote.restartAgent(r);
+      if (observed?.backend === "herdr")
+        r = await this.store.update(id, (v) => ({
+          ...v,
+          guestHerdr: observed,
+        }));
       return r;
     });
   }

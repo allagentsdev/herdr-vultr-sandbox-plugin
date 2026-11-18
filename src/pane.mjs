@@ -2,6 +2,7 @@ import fs from "node:fs";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
+import { setTimeout as delay } from "node:timers/promises";
 import { createInterface } from "node:readline/promises";
 import { ACTIONS } from "./constants.mjs";
 import { Store, namespace } from "./state.mjs";
@@ -15,6 +16,7 @@ import { Connections } from "./connections.mjs";
 import { serveWorker } from "./control.mjs";
 import { currentPane, reportSession } from "./herdr.mjs";
 import { recordAdapter } from "./adapters.mjs";
+import { guestBackend } from "./guest-herdr.mjs";
 import { workerInfo, replaceWorker, forgetWorker } from "./mappings.mjs";
 import { saveConfiguration, inspectConfiguration } from "./onboarding.mjs";
 import { runSync } from "./process.mjs";
@@ -243,24 +245,41 @@ export async function runWorker({
     });
     const attach = async () => {
       paneId = resolvePane(env);
-      const registered = registerSession(
-        id,
-        paneId,
-        recordAdapter(r).capabilities.herdrDetectionKind,
-        env,
-      );
       await store.update(id, (v) => ({
         ...v,
         workerPane: { paneId, pid: process.pid },
-        transport: { state: "attached", sessionMetadata: registered },
+        transport: { state: "attached", sessionMetadata: false },
       }));
       display(
-        "Attached to the same tmux worker. Ctrl-b d returns here without stopping it. Closing this local pane also leaves compute allocated.",
+        guestBackend(r) === "herdr"
+          ? "Attached to the same native Herdr terminal. Ctrl-b q returns here without stopping it; Ctrl-b Ctrl-b sends literal Ctrl-b. Closing this local pane leaves compute allocated."
+          : "Attached to the legacy tmux worker. Ctrl-b d returns here without stopping it. Closing this local pane leaves compute allocated.",
       );
-      let exit;
+      let exit, metadata;
+      const registration = new AbortController();
       try {
-        exit = await remote.attach(r);
+        const attachment = remote.attach(r);
+        metadata = (async () => {
+          const kind = recordAdapter(r).capabilities.herdrDetectionKind;
+          for (let attempt = 0; attempt < 20; attempt++) {
+            if (registration.signal.aborted) return;
+            if (registerSession(id, paneId, kind, env)) {
+              await store.update(id, (v) => ({
+                ...v,
+                transport: { ...v.transport, sessionMetadata: true },
+              }));
+              return;
+            }
+            await delay(250, undefined, { signal: registration.signal });
+          }
+        })().catch((error) => {
+          if (error.name !== "AbortError")
+            display("Continuation metadata could not be recorded.");
+        });
+        exit = await attachment;
       } finally {
+        registration.abort();
+        await metadata;
         restoreTerminal();
       }
       let session;
@@ -271,6 +290,7 @@ export async function runWorker({
       }
       await store.update(id, (v) => ({
         ...v,
+        ...(session.backend === "herdr" ? { guestHerdr: session } : {}),
         transport: {
           state: session.status,
           exit: exit ?? null,

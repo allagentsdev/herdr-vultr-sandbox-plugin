@@ -5,9 +5,12 @@ worker has one dedicated Vultr Cloud Compute instance. A worker UUID survives
 power-off and snapshot restore; instance and snapshot IDs are separate resources.
 Closing a pane disconnects the UI and leaves the worker and billed allocation.
 
-This is a candidate implementation. Local fake-provider tests and isolated actual
-Herdr 0.9.5 contracts are separate from **pending live Vultr and authenticated
-remote-agent conformance**. No live Vultr resources were used to implement it.
+This is a candidate implementation. An owner-authorized live trial verified the
+merged legacy worker's bootstrap, independent Codex login and allocated resume,
+plus separate native guest Herdr/Codex process proofs. **Full lifecycle
+conformance remains open**, including the provider Stop discrepancy below and
+the complete fresh-worker native Herdr path. Local fake-provider tests and
+isolated actual Herdr 0.9.5 contracts remain separate evidence.
 See [capabilities](docs/capability-parity.md), [architecture](docs/adr/0001-vultr-worker-lifecycle.md)
 and [verification](docs/verification.md).
 
@@ -149,14 +152,37 @@ Filesystem snapshots alone do not establish application consistency.
 
 ## Dashboard and lifecycle
 
-Reconnect attaches the existing worker-keyed tmux session. `Ctrl-b d` returns to
-the dashboard without restarting the agent. An exited agent leaves a dead pane;
-Restart Agent requires `RESTART <worker UUID>` and refuses to replace a live
-process. Resume after reboot verifies identity/auth/services before enabling its
-configured conversation resume command. Herdr gets a supported foreground hint
-only while SSH is active. The dashboard is never an agent input target. Session
-metadata carries the absolute reconnect command, never an invented native
-conversation ID.
+The live trial found a provider lifecycle gap: graceful guest shutdown left the
+instance API reporting running. The test reached provider stopped power only
+after separately authorized, exact-target `/halt` reconciliation. Vultr documents
+that endpoint as its provider Stop operation. This transport change does not fix
+the plugin's guest-only Stop or establish full Stop/Hibernate conformance. The
+pending receipt, checkpoint and billed allocation remain visible; no automatic
+provider fallback or mutation replay is implemented. See the
+[verification limits](docs/verification.md#live-provider-stop-gate).
+
+New logical workers run pinned stock Herdr 0.9.5 on the guest, with a private
+`worker-<UUID>` session and durable state under the worker directory. Reconnect
+attaches its existing native terminal; `Ctrl-b q` returns to the dashboard and
+`Ctrl-b Ctrl-b` sends a literal `Ctrl-b`. Actual guest workspace, pane, terminal,
+process and detected agent observations, with their observation time, are exposed
+in worker info. A running
+process is not evidence that the agent is ready for input. When the actual child
+exits, only the attachment client closes and the dashboard returns; guest Herdr
+and its terminal remain available for observation and explicit restart.
+
+Existing records without a backend marker retain explicit legacy tmux recovery;
+`Ctrl-b d` detaches those workers. They are never silently migrated or relaunched.
+Restart Agent requires `RESTART <worker UUID>` and refuses a live process.
+After guest server loss, Resume verifies identity/auth/services before the
+configured continuation can run. A one-use Resume gate is consumed before setup;
+ordinary Reconnect cannot use a leftover gate. An inherited writer lease blocks
+checkpoint or continuation while an owned child survives guest server loss.
+Herdr restore cannot automatically resume agents. Guest Herdr config/state/cache/runtime and socket belong only to this
+worker; ambient host session/socket defaults are discarded. Strict SSH and
+independent guest agent login remain in force. The dashboard is never an agent
+input target. Local continuation metadata contains the absolute reconnect command,
+never an invented native conversation ID.
 
 | Control          | Behavior                                                                                                                               |
 | ---------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
@@ -177,8 +203,8 @@ settles it. Instances use exact ownership/operation tags; snapshots use an exact
 operation description because snapshots have no tags. Snapshot completion is
 `complete`, not `available`. Blocks come from separate account inventory and
 block lifecycle mutations. Start can restart a running instance, so it is never
-sent speculatively. Force `halt`, reinstall/rebuild and automatic retry are not
-used. Operator changes during a transition can leave a receipt requiring manual
+sent speculatively. The plugin does not submit provider `/halt`, reinstall/rebuild
+or automatic mutation retries. Operator changes during a transition can leave a receipt requiring manual
 inspection; this favors retained data over automatic convergence.
 
 Power-off is still billed. Hibernation exchanges instance charges for separately
