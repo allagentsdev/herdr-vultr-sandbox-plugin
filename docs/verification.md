@@ -63,8 +63,10 @@ Supply `--snapshot EXACT_SNAPSHOT_ID` only to inspect the worker's already saved
 snapshot. The script checks exact durable IDs before reading the token, observes
 provider ownership/power, performs strict pinned SSH source/identity checks and
 observes the selected native Herdr or legacy tmux backend,
-and discards remote output. It never starts, halts, rebuilds, creates or deletes
-resources. Successful output is a limited observation, not full lifecycle or
+and reports only observed session status and workspace/pane/terminal IDs. Raw
+source-probe output and free-form agent metadata (including tokens, state labels,
+session values, titles and working directories) are omitted. It never starts,
+halts, rebuilds, creates or deletes resources. Successful output is a limited observation, not full lifecycle or
 authenticated-agent conformance. The broader trial checklist is in the capability
 matrix. Deletion always remains an exact-target user approval in the dashboard.
 

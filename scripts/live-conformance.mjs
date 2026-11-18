@@ -42,7 +42,6 @@ try {
     throw Error("Server is not running. This script will not start it.");
   const ssh = new SSH(store, r.config),
     { source, state } = remotePaths(r);
-  // Remote output is intentionally discarded; it could include agent credentials.
   ssh.exec(r, `test -d ${q(source)} && test -s ${q(state + "/identity.json")}`);
   const session = new Remote(ssh).inspectSession(r);
   if (session.status !== "detached")
@@ -61,7 +60,12 @@ try {
       sshPinned: true,
       sourcePresent: true,
       guestBackend: guestBackend(r),
-      remoteSession: session,
+      remoteSession: {
+        status: session.status,
+        workspaceId: session.workspaceId ?? null,
+        paneId: session.paneId ?? null,
+        terminalId: session.terminalId ?? null,
+      },
     }),
   );
 } catch (e) {
