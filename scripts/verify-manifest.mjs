@@ -25,5 +25,5 @@ for (const item of [...manifest.actions, ...manifest.panes]) {
 for (const a of manifest.actions)
   assert.deepEqual(a.contexts, ["workspace", "pane"]);
 console.log(
-  "Manifest: Linux hosts, eighteen actions, absolute plugin-root entrypoints and npm install hook verified.",
+  `Manifest: Linux hosts, ${ACTIONS.length} actions, absolute plugin-root entrypoints and npm install hook verified.`,
 );

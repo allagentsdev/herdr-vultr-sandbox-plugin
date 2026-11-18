@@ -15,6 +15,12 @@ contexts = ["workspace", "pane"]
 command = ["sh", "-c", 'exec node "$HERDR_PLUGIN_ROOT/src/action.mjs"']
 
 [[actions]]
+id = "new-worker"
+title = "New Vultr worker"
+contexts = ["workspace", "pane"]
+command = ["sh", "-c", 'exec node "$HERDR_PLUGIN_ROOT/src/action.mjs"']
+
+[[actions]]
 id = "reconnect"
 title = "Reconnect to Vultr worker"
 contexts = ["workspace", "pane"]

@@ -53,6 +53,63 @@ test("pane mappings select the same worker and diagnostics never expose credenti
   assert.ok(!JSON.stringify(info).includes("/private/key"));
   assert.ok(!JSON.stringify(info).includes("agent resume"));
 });
+test("direct worker pane authority wins over source mappings while competing dashboard claims stay ambiguous", async (t) => {
+  const f = await fixture(t);
+  await f.store.update(f.id, (r) => ({
+    ...r,
+    workerPane: { paneId: "w1:p9" },
+  }));
+  const b = await f.store.create({
+    ...f.store.get(f.id),
+    id: randomUUID(),
+    sourcePaneId: "w1:p9",
+    workerPane: { paneId: "w1:p10" },
+  });
+  assert.equal(
+    selectWorker(
+      f.store,
+      { focused_pane_id: "w1:p9", workspace_id: "w1" },
+      f.env,
+    )?.id,
+    f.id,
+  );
+  assert.equal(
+    selectWorker(
+      f.store,
+      { focused_pane_id: "w1:p10", workspace_id: "w1" },
+      f.env,
+    )?.id,
+    b.id,
+  );
+  assert.equal(
+    selectWorker(
+      f.store,
+      { focused_pane_id: "w1:p9", workspace_id: "other" },
+      f.env,
+    ),
+    null,
+  );
+  assert.equal(
+    selectWorker(
+      f.store,
+      { focused_pane_id: "w1:p9" },
+      { HERDR_SOCKET_PATH: "/other/socket" },
+    ),
+    null,
+  );
+  await f.store.update(b.id, (r) => ({
+    ...r,
+    workerPane: { paneId: "w1:p9" },
+  }));
+  assert.equal(
+    selectWorker(f.store, { focused_pane_id: "w1:p9" }, f.env),
+    null,
+  );
+  assert.equal(
+    selectWorker(f.store, { focused_pane_id: "w1:p9" }, f.env, b.id).id,
+    b.id,
+  );
+});
 test("a replacement retains history and cannot create a successor before destructive confirmation/deletion", async (t) => {
   const f = await fixture(t);
   let deleted = false;
