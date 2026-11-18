@@ -296,3 +296,59 @@ test("native checkpoint refuses a live-writer rejection before capturing source"
   );
   assert.equal(captured, 0);
 });
+
+test("readiness retains command_timeout immediately and still retries ordinary connection errors", async () => {
+  const { PluginError } = await import("../src/result.mjs");
+  const timeout = new PluginError("command_timeout", "uncertain readiness");
+  let calls = 0;
+  const remote = new Remote({
+    exec: (_record, _command, options) => {
+      calls++;
+      assert.equal(options.timeout, 20000);
+      throw timeout;
+    },
+  });
+  await assert.rejects(
+    remote.waitReady({}, { attempts: 2, interval: 0 }),
+    (error) => error === timeout,
+  );
+  assert.equal(calls, 1);
+  calls = 0;
+  remote.ssh.exec = () => {
+    if (++calls === 1) throw Error("connection refused");
+    return {};
+  };
+  await remote.waitReady({}, { attempts: 2, interval: 0 });
+  assert.equal(calls, 2);
+  remote.ssh.exec = () => {
+    throw Error("connection refused");
+  };
+  await assert.rejects(remote.waitReady({}, { attempts: 2, interval: 0 }), {
+    code: "ssh_not_ready",
+  });
+});
+
+test("authentication retains the command_timeout object and ordinary failures remain auth_required", async () => {
+  const { PluginError } = await import("../src/result.mjs");
+  const timeout = new PluginError(
+      "command_timeout",
+      "uncertain authentication",
+    ),
+    record = {
+      id: "worker",
+      config: validateConfig({ adapter: { authCheck: "agent status" } }),
+    };
+  const remote = new Remote({
+    exec: () => {
+      throw timeout;
+    },
+  });
+  assert.throws(
+    () => remote.auth(record),
+    (error) => error === timeout,
+  );
+  remote.ssh.exec = () => {
+    throw Error("unauthenticated");
+  };
+  assert.throws(() => remote.auth(record), { code: "auth_required" });
+});

@@ -191,12 +191,12 @@ export async function runWorker({
           }
         : request,
     );
-  const close = await serveWorker(store, id, async (action) => {
+  const close = await serveWorker(store, id, async (action, requestId) => {
     paneId = resolvePane(env);
     if (action === "ping") return { status: "alive", paneId };
     if (!ACTIONS.includes(action)) return { status: "invalid_request", paneId };
     if (busy || queued || acceptance) return { status: "busy", paneId };
-    const requestId = randomUUID();
+    requestId ??= randomUUID();
     acceptance = recordRequest(requestId, action, "queued");
     try {
       await acceptance;

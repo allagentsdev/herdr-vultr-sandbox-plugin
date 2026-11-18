@@ -307,7 +307,7 @@ test("a rejected acceptance write cannot queue an action and releases the accept
   assert.equal(store.get(id).controlRequests[0].status, "completed");
 });
 
-test("closing a dashboard drains acceptance after client timeout before releasing ownership", async (t) => {
+test("closing a dashboard drains real state-lock acceptance after client timeout before releasing ownership", async (t) => {
   const { hasLiveOwner } = await import("../src/control.mjs");
   const store = new Store(temporary(t)),
     id = randomUUID();
@@ -318,18 +318,19 @@ test("closing a dashboard drains acceptance after client timeout before releasin
     phase: "ready",
     config: {},
   });
-  const update = store.update.bind(store);
-  let enter, release, reply;
-  const entered = new Promise((resolve) => (enter = resolve)),
-    gate = new Promise((resolve) => (release = resolve));
-  store.update = async (worker, fn) => {
-    const next = fn(store.get(worker));
-    if (next.controlRequests?.some((x) => x.status === "queued")) {
-      enter();
-      await gate;
-    }
-    return update(worker, fn);
-  };
+  let release,
+    reportReply,
+    reply,
+    second,
+    holding,
+    entered = false,
+    retained;
+  const gate = new Promise((resolve) => {
+    release = resolve;
+  });
+  const received = new Promise((resolve) => {
+    reportReply = resolve;
+  });
   const worker = runWorker({
     store,
     id,
@@ -341,19 +342,202 @@ test("closing a dashboard drains acceptance after client timeout before releasin
     resolvePane: () => "w1:p2",
     display: () => {},
     menuInput: async () => {
-      reply = requestWorker(store, id, "stop", { timeout: 30 });
-      await entered;
+      holding = store.withLock(
+        id,
+        async () => {
+          entered = true;
+          await gate;
+        },
+        { suffix: "state" },
+      );
+      while (!entered) await delay(1);
+      const result = await requestWorker(store, id, "stop", { timeout: 30 });
+      second = await requestWorker(store, id, "status");
+      reportReply(result);
       return "q";
     },
   });
-  await entered;
-  assert.equal(await reply, null);
-  const retained = hasLiveOwner(store, id);
-  release();
-  await worker;
+  try {
+    reply = await received;
+    await delay(10);
+    retained = hasLiveOwner(store, id);
+  } finally {
+    release();
+    await holding;
+    await worker;
+  }
+  assert.equal(reply?.status, "outcome_unknown");
+  assert.match(reply.requestId, /^[0-9a-f-]{36}$/);
+  assert.equal(second.status, "busy");
   assert.equal(retained, true);
   assert.equal(hasLiveOwner(store, id), false);
-  assert.equal(store.get(id).controlRequests[0].status, "interrupted");
+  const saved = store.get(id).controlRequests[0];
+  assert.equal(saved.requestId, reply.requestId);
+  assert.equal(saved.status, "interrupted");
+  assert.equal(saved.code, "owner_closed");
+});
+
+test("public default-timeout action reconciles the same UUID through Info after delayed state-lock acceptance without replay", async (t) => {
+  const { runAction } = await import("../src/actions.mjs");
+  const { namespace } = await import("../src/state.mjs");
+  const store = new Store(temporary(t)),
+    id = randomUUID(),
+    env = { HERDR_PANE_ID: "w1:p1", HERDR_SOCKET_PATH: "/synthetic/recovery" };
+  await store.create({
+    id,
+    namespace: namespace(env),
+    localRoot: temporary(t),
+    phase: "ready",
+    config: {},
+  });
+  const options = {
+    store,
+    env,
+    context: { focused_pane_id: "w1:p1" },
+    focusPane: () => {},
+    openPane: () => assert.fail("Unknown submission cannot reopen a dashboard"),
+  };
+  const info = () => runAction("info", { worker: id }, options);
+  let menus = 0,
+    calls = 0,
+    reply,
+    elapsed,
+    holdElapsed,
+    missing,
+    queued,
+    completed,
+    callsAtReply;
+  await runWorker({
+    store,
+    id,
+    env,
+    resolvePane: () => "w1:p2",
+    display: () => {},
+    services: {
+      life: {
+        power: async () => {
+          calls++;
+        },
+        status: async () => ({ powerState: "off" }),
+      },
+    },
+    menuInput: async () => {
+      if (menus++) {
+        completed = await info();
+        return "q";
+      }
+      let release,
+        entered = false;
+      const gate = new Promise((resolve) => {
+        release = resolve;
+      });
+      const holding = store.withLock(
+        id,
+        async () => {
+          entered = true;
+          await gate;
+        },
+        { suffix: "state" },
+      );
+      while (!entered) await delay(1);
+      const started = performance.now();
+      try {
+        reply = await runAction("stop", { worker: id }, options);
+        elapsed = performance.now() - started;
+        callsAtReply = calls;
+        missing = await info();
+      } finally {
+        while (performance.now() - started < 1750)
+          await delay(Math.max(1, 1750 - (performance.now() - started)));
+        holdElapsed = performance.now() - started;
+        release();
+        await holding;
+      }
+      for (let i = 0; i < 100 && !store.get(id).controlRequests.length; i++)
+        await delay(5);
+      queued = await info();
+      return "";
+    },
+  });
+  assert.equal(reply.status, "outcome_unknown");
+  assert.match(reply.requestId, /^[0-9a-f-]{36}$/);
+  assert.ok(elapsed >= 1400, `default timeout returned after ${elapsed}ms`);
+  assert.ok(holdElapsed >= 1750, `state lock held for ${holdElapsed}ms`);
+  t.diagnostic(
+    `default timeout reply=${elapsed}ms; actual state lock hold=${holdElapsed}ms`,
+  );
+  assert.equal(callsAtReply, 0);
+  assert.deepEqual(missing.controlRequests, []);
+  assert.equal(
+    queued.controlRequests.find((r) => r.requestId === reply.requestId)?.status,
+    "queued",
+  );
+  assert.equal(
+    completed.controlRequests.find((r) => r.requestId === reply.requestId)
+      ?.status,
+    "completed",
+  );
+  assert.equal(calls, 1);
+});
+
+test("queued reconnect preserves authentication command_timeout without Login or attach", async (t) => {
+  const { Remote } = await import("../src/remote.mjs");
+  const { PluginError } = await import("../src/result.mjs");
+  const store = new Store(temporary(t)),
+    id = randomUUID();
+  await store.create({
+    id,
+    namespace: "test",
+    localRoot: temporary(t),
+    phase: "ready",
+    vm: { serverId: "vm", hostKey: "pin", initialized: true },
+    config: {
+      adapter: {
+        launch: "agent",
+        resume: "agent resume",
+        authCheck: "agent status",
+      },
+    },
+  });
+  let menus = 0,
+    calls = 0,
+    reply;
+  const output = [],
+    remote = new Remote({
+      exec: () => {
+        calls++;
+        throw new PluginError(
+          "command_timeout",
+          "remote outcome remains uncertain",
+        );
+      },
+      interactive: () =>
+        assert.fail("Timeout cannot authorize Login or attach"),
+    });
+  await runWorker({
+    store,
+    id,
+    resolvePane: () => "w1:p2",
+    display: (text) => output.push(text),
+    services: {
+      life: { owned: async () => ({ powerState: "running" }) },
+      remote,
+    },
+    menuInput: async () => {
+      if (menus++) return "q";
+      reply = await requestWorker(store, id, "reconnect");
+      return "";
+    },
+  });
+  const receipt = store
+    .get(id)
+    .controlRequests.find((r) => r.requestId === reply.requestId);
+  assert.equal(receipt.status, "failed");
+  assert.equal(receipt.code, "command_timeout");
+  assert.equal(calls, 1);
+  assert.ok(
+    output.some((text) => text.includes("remote outcome remains uncertain")),
+  );
 });
 
 test("queued login and attach failures never claim completed receipts", async (t) => {
