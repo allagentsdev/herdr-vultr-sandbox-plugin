@@ -412,8 +412,13 @@ try {
         "--source",
         "recent-unwrapped",
         "--lines",
-        "40",
+        "120",
       ]).stdout;
+    fs.writeFileSync(
+      path.join(root, "installed-upload-review-" + record.id + ".txt"),
+      text,
+      { mode: 0o600 },
+    );
     assert.equal(record.workerPane.paneId, receipt.paneId);
     assert.equal(record.sourcePaneId, sourcePane);
     assert.equal(record.localRoot, source);
@@ -429,7 +434,7 @@ try {
     );
     assert.ok(text.includes(`/srv/herdr/workers/${record.id}/source`));
     assert.ok(text.includes(`Type UPLOAD ${manifest.digest}`));
-    created.push({ receipt, record });
+    created.push({ receipt, record, uploadReviewText: text });
   }
   assert.notEqual(created[0].receipt.workerId, created[1].receipt.workerId);
   assert.notEqual(created[0].receipt.paneId, created[1].receipt.paneId);
@@ -593,6 +598,13 @@ try {
         home: record.agentAdapter.codexHome,
         digest: record.baselineDigest,
       })),
+      installedUploadReviewEvidence: created.map(
+        ({ record, uploadReviewText }) => ({
+          workerId: record.id,
+          boundedRows: 120,
+          text: uploadReviewText,
+        }),
+      ),
       explicitPluginFocus: true,
       persistentDashboard: true,
       ownerReconnect: true,

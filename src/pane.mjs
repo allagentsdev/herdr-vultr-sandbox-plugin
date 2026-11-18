@@ -11,6 +11,7 @@ import { captureSnapshot, readSnapshot } from "./manifest.mjs";
 import { Cloud } from "./provider.mjs";
 import { SSH, remotePaths, clientPublicKey } from "./ssh.mjs";
 import { Remote } from "./remote.mjs";
+import { ensureController, controllerStatus } from "./expiry-service.mjs";
 import { Lifecycle } from "./lifecycle.mjs";
 import { Connections } from "./connections.mjs";
 import { serveWorker } from "./control.mjs";
@@ -36,7 +37,7 @@ async function ask(prompt) {
     rl.close();
   }
 }
-async function approveUpload(store, id) {
+async function approveUpload(store, id, askInput, display) {
   return store.withLock(id, async () => {
     let r = store.get(id);
     if (r.uploadApproval) return readSnapshot(r.baseline);
@@ -53,11 +54,15 @@ async function approveUpload(store, id) {
       checkpointDigest: snapshot.digest,
       phase: "upload-review",
     }));
-    show(
-      `Worker: ${id}\nDestination: ${remotePaths(r).source}\nServer: ${r.config.plan} in ${r.config.region}; image ${r.config.osId}\nManifest: ${snapshot.directory}/manifest.json\nSHA256: ${snapshot.digest}\n${snapshot.files.length} files, ${snapshot.totalBytes} bytes. ${snapshot.excluded.length} excluded paths.\nComplete eligible manifest (path, size, mode, SHA256):\n${snapshot.files.map((f) => `${JSON.stringify(f.path)}\t${f.size}\t${f.mode}\t${f.sha256}`).join("\n")}\nReview ordinary source for secrets the filters cannot detect. Server/IPv4 billing starts on allocation; power-off stays billed. Snapshots are billed separately.`,
+    const timeout =
+      r.expiry === null
+        ? 0
+        : (r.expiry?.minutes ?? r.config.idleTimeoutMinutes ?? 15);
+    display(
+      `Worker: ${id}\nDestination: ${remotePaths(r).source}\nServer: ${r.config.plan} in ${r.config.region}; image ${r.config.osId}\nManifest: ${snapshot.directory}/manifest.json\nSHA256: ${snapshot.digest}\n${snapshot.files.length} files, ${snapshot.totalBytes} bytes. ${snapshot.excluded.length} excluded paths.\nComplete eligible manifest (path, size, mode, SHA256):\n${snapshot.files.map((f) => `${JSON.stringify(f.path)}\t${f.size}\t${f.mode}\t${f.sha256}`).join("\n")}\nReview ordinary source for secrets the filters cannot detect. Server/IPv4 billing starts on allocation; power-off stays billed. Snapshots are billed separately.\n${timeout ? "Automatic hibernation after 15 minutes of confirmed inactivity. Approval authorizes recurring checkpoint, Halt, verified snapshot and deletion of each instance allocated to this exact logical worker. Working, blocked and unknown activity retains compute; changed or stale observations reset idle. Sensitive snapshots remain billed. A host user service will be installed and must remain online." : "Automatic hibernation is disabled; compute stays billed until manually released."}`,
     );
     if (
-      (await ask(
+      (await askInput(
         `Type UPLOAD ${snapshot.digest} to approve these exact bytes and allocate the dedicated server > `,
       )) !== `UPLOAD ${snapshot.digest}`
     )
@@ -69,6 +74,17 @@ async function approveUpload(store, id) {
       throw new PluginError("snapshot_corrupt", "Reviewed source changed.");
     await store.update(id, (v) => ({
       ...v,
+      expiry:
+        v.expiry !== undefined
+          ? v.expiry
+          : timeout
+            ? {
+                mode: "idle",
+                minutes: 15,
+                approvedAt: new Date().toISOString(),
+                session: null,
+              }
+            : null,
       uploadApproval: {
         digest: snapshot.digest,
         approvedAt: new Date().toISOString(),
@@ -223,7 +239,9 @@ export async function runWorker({
       api = new Cloud(readPrivate(r.config.tokenFile));
       ssh = new SSH(store, r.config);
       remote = new Remote(ssh);
-      life = new Lifecycle(store, api, remote);
+      life = new Lifecycle(store, api, remote, {
+        ensureController: () => ensureController(store),
+      });
     }
     const clientKey = async (record = store.get(id)) =>
       clientPublicKey(record.config);
@@ -320,6 +338,16 @@ export async function runWorker({
           "Remote login process ended unsuccessfully; complete owner login before reconnecting.",
         );
     };
+    const displayStatus = async () => {
+      const status = await life.status(id);
+      display(
+        JSON.stringify(
+          { ...status, controller: controllerStatus(store) },
+          null,
+          2,
+        ),
+      );
+    };
     let action = initialAction;
     while (true) {
       busy = true;
@@ -337,7 +365,7 @@ export async function runWorker({
               await attach();
               break;
             }
-            await approveUpload(store, id);
+            await approveUpload(store, id, askInput, display);
             r = store.get(id);
             r = await life.create(
               id,
@@ -394,12 +422,37 @@ export async function runWorker({
             r = await connections.prepare(id, "restart-agent");
             await attach();
             break;
+          case "enable-auto-hibernate":
+            display(
+              "Authorize recurring automatic checkpoint, Halt, verified snapshot and instance release after 15 minutes of confirmed inactivity for this worker. Working, blocked and unknown activity retains compute. Snapshots retain remote credentials and remain billed. The host user service must remain online.",
+            );
+            await life.configureExpiry(
+              id,
+              15,
+              await askInput(
+                `Type AUTO-HIBERNATE ${id} to authorize automatic release > `,
+              ),
+            );
+            display(JSON.stringify(store.get(id).expiry, null, 2));
+            break;
+          case "disable-auto-hibernate":
+            await life.disableExpiry(
+              id,
+              await askInput(
+                `Type DISABLE AUTO-HIBERNATE ${id}; allocated compute stays billed > `,
+              ),
+            );
+            break;
+          case "delay-hibernation":
+            await life.extendExpiry(id, 15);
+            display(JSON.stringify(store.get(id).expiry, null, 2));
+            break;
           case "stop":
             await life.power(id, "shutdown");
-            display(JSON.stringify(await life.status(id), null, 2));
+            await displayStatus();
             break;
           case "status":
-            display(JSON.stringify(await life.status(id), null, 2));
+            await displayStatus();
             break;
           case "info":
             display(JSON.stringify(workerInfo(r), null, 2));
@@ -415,7 +468,7 @@ export async function runWorker({
               else await life.deleteServer(id, r.pending.confirmation);
             } else if (r.hibernate)
               display(JSON.stringify(await life.hibernate(id), null, 2));
-            display(JSON.stringify(await life.status(id), null, 2));
+            await displayStatus();
             break;
           }
           case "hibernate": {
@@ -430,7 +483,7 @@ export async function runWorker({
                 `Type ${result.confirmation} to release this exact server > `,
               ),
             );
-            display(JSON.stringify(await life.status(id), null, 2));
+            await displayStatus();
             break;
           }
           case "delete-server":
@@ -461,7 +514,7 @@ export async function runWorker({
               );
               return;
             }
-            display(JSON.stringify(await life.status(id), null, 2));
+            await displayStatus();
             break;
           }
           case "apply-changes": {
@@ -527,7 +580,7 @@ export async function runWorker({
       }
       busy = false;
       display(
-        `Worker ${id} — reconnect | resume | login | status | info | recover | apply-changes | hibernate | stop | restart-agent | replace | forget | delete-server | q`,
+        `Worker ${id} — reconnect | resume | login | status | info | recover | apply-changes | hibernate | enable-auto-hibernate | delay-hibernation | disable-auto-hibernate | stop | restart-agent | replace | forget | delete-server | q`,
       );
       if (queued) {
         ({ action, requestId: controlRequestId } = queued);

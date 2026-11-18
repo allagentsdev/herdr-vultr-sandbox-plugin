@@ -24,6 +24,32 @@ characterization passed before adaptation; the rewritten Vultr provider and
 lifecycle tests failed against the old implementation before the new methods
 were written.
 
+Confirmed inactivity adds focused `idle-expiry`, `expiry`, `activity`,
+`expiry-service` and `ssh-timeout` tests. The first new regression called the
+existing create path with approved policy and a failing controller dependency;
+it failed with a missing expected `controller_unavailable` rejection before
+production changes. The local checks cover exact-worker consent, 15 minutes of
+unchanged idle evidence, working/blocked/unknown protection, changed/stale reset,
+fresh final activity checks, fixed 15-minute deferral, new bound Resume/restore
+sessions, stale jobs, failed Resume writers and unknown-outcome reconciliation.
+Vultr-specific fixtures require bodyless Halt, fresh OFF, exact image description,
+complete state, positive size, OS/checkpoint checks, ownership and no attached
+blocks. Good images survive failures.
+
+Service tests replace supervisor commands with owned adapters and write unit
+definitions only under temporary fixture homes. A temporary controller child
+starts through that adapter, persists a deliberate missing-fixture-token failure,
+restarts and preserves the session; cleanup asserts owned children exited. No
+actual systemctl/launchctl service is installed. SSH tests exercise the real class
+with fake process boundaries: controller 120 seconds, readiness 20 seconds, normal
+commands five minutes, interactive attachments without a command deadline and
+typed timeouts. Guest activity uses the existing helper inspect contract and
+actual persisted identities; the native helper is unchanged.
+
+These are local source and process checks. They do not prove authenticated
+automatic Vultr hibernation/restore, actual host-service installation, offline-host
+enforcement or macOS execution. Those remain separate conformance work.
+
 `test:herdr` uses a named disposable server with isolated XDG config/state/cache
 and its own explicit socket. It never routes through the active-session shim.
 It links the plugin only into that isolated configuration, checks real foreground
@@ -228,3 +254,17 @@ in the characterization. Unavailable and missing-pane observations clear current
 process fields and carry a fresh observation time. The existing restore-readiness
 contract remains durable before launch, including when launch acknowledgement is
 lost; readiness records completed gates rather than observed agent activity.
+
+The idle port also has a bounded integration observation against an owned stock
+Herdr 0.9.5 server and the unchanged deployed guest helper. The synthetic
+terminal fixture used a recorded 10-second work hold. Production `Remote.activity`
+polled the real helper through a local adapter that changed only deployment roots;
+there was no SSH network connection. Exact worker/session/short-socket and native
+pane/terminal identities matched. Actual `agent.get` sequence advanced 1 → 2 → 3
+with idle → working → idle observations; mismatched identity remained unknown,
+and confirmed child exit was observed. No extra pane reads or direct agent queries
+preceded working detection in the accepted run. An earlier 3-second timeout remains
+inconclusive, and a separate diagnostic run with extra reads is retained separately.
+This checks the local native observation boundary, not authenticated agent behavior,
+cloud hibernation, real host-service installation, macOS execution or provider-owned
+expiry. The original helper process/PTY proofs remain separate and unchanged.

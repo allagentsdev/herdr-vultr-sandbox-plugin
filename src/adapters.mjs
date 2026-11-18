@@ -92,6 +92,7 @@ export function resolveAdapter(
     install: "",
     login: "exec bash -l",
     versionCommand: null,
+    activity: config.adapter?.activity ?? "",
     quiesce: config.adapter?.quiesce ?? "",
     restart: config.adapter?.restart ?? "",
   };
@@ -208,9 +209,15 @@ export function recordAdapter(record) {
 }
 export function adapterCommands(adapter) {
   return Object.fromEntries(
-    ["install", "authCheck", "launch", "resume", "quiesce", "restart"].map(
-      (key) => [key, adapter[key] ?? ""],
-    ),
+    [
+      "activity",
+      "install",
+      "authCheck",
+      "launch",
+      "resume",
+      "quiesce",
+      "restart",
+    ].map((key) => [key, adapter[key] ?? ""]),
   );
 }
 

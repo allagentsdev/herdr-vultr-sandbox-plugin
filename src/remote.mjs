@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { randomUUID } from "node:crypto";
+import { randomUUID, createHash } from "node:crypto";
 import { shellQuote as q } from "./process.mjs";
 import { readSnapshot, readRegular, saveSnapshot } from "./manifest.mjs";
 import { remotePaths, tmuxCommand } from "./ssh.mjs";
@@ -295,6 +295,98 @@ export class Remote {
   }
   login(r) {
     return this.ssh.interactive(r, recordAdapter(r).login);
+  }
+  activity(r) {
+    const unknown = { state: "unknown" };
+    const token = (value) => createHash("sha256").update(value).digest("hex");
+    try {
+      if (r.config.adapter?.activity) {
+        const value = JSON.parse(
+          this.command(r, r.config.adapter.activity, { maxBuffer: 4096 })
+            .stdout,
+        );
+        if (["working", "blocked"].includes(value?.state))
+          return { state: value.state };
+        if (
+          value?.state === "idle" &&
+          typeof value.token === "string" &&
+          value.token.length > 0 &&
+          value.token.length <= 256
+        )
+          return { state: "idle", token: token(value.token) };
+        return unknown;
+      }
+      const saved = r.guestHerdr;
+      if (
+        guestBackend(r) !== "herdr" ||
+        !saved ||
+        !r.vm ||
+        saved.workerId !== r.id ||
+        saved.session !== "worker-" + r.id
+      )
+        return unknown;
+      const observed = this.inspectSession(r);
+      if (
+        observed.backend !== "herdr" ||
+        !["detached", "agent-exited"].includes(observed.status) ||
+        ["workerId", "session", "workspaceId", "paneId", "terminalId"].some(
+          (field) =>
+            typeof saved[field] !== "string" ||
+            !saved[field] ||
+            observed[field] !== saved[field],
+        )
+      )
+        return unknown;
+      const agent = observed.agent;
+      if (
+        agent &&
+        (agent.terminal_id !== saved.terminalId ||
+          agent.pane_id !== saved.paneId ||
+          agent.agent !== recordAdapter(r).capabilities.herdrDetectionKind)
+      )
+        return unknown;
+      if (["working", "blocked"].includes(agent?.agent_status))
+        return { state: agent.agent_status };
+      if (
+        observed.status === "agent-exited" &&
+        observed.pid === null &&
+        Number.isSafeInteger(observed.shellPid) &&
+        observed.shellPid > 0
+      )
+        return {
+          state: "idle",
+          token: token(
+            JSON.stringify([
+              r.vm.serverId,
+              saved.terminalId,
+              "exited",
+              observed.shellPid,
+            ]),
+          ),
+        };
+      if (
+        !agent ||
+        !["idle", "done"].includes(agent.agent_status) ||
+        agent.interactive_ready === false ||
+        agent.launch_pending ||
+        agent.screen_detection_skipped ||
+        !Number.isSafeInteger(agent.state_change_seq) ||
+        agent.state_change_seq < 0
+      )
+        return unknown;
+      return {
+        state: "idle",
+        token: token(
+          JSON.stringify([
+            r.vm.serverId,
+            saved.terminalId,
+            agent.state_change_seq,
+          ]),
+        ),
+      };
+    } catch {
+      return unknown;
+    }
   }
   inspectSession(r) {
     if (guestBackend(r) === "herdr") return this.guest(r, "inspect");

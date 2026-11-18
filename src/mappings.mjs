@@ -151,6 +151,7 @@ export function workerInfo(r) {
     previousSnapshotId: r.snapshot?.previousImageId ?? null,
     guestBackend: guestBackend(r),
     guestHerdr: r.guestHerdr ?? null,
+    automaticHibernation: r.expiry ?? null,
     agentKind: a.kind,
     expectedVersion: a.version ?? null,
     installedVersion: r.agentRuntime?.installedVersion ?? null,

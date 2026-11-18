@@ -22,6 +22,16 @@ for (const item of [...manifest.actions, ...manifest.panes]) {
   const name = item.command[2].includes("action.mjs") ? "action" : "pane";
   assert.ok(fs.statSync(path.join(root, "src", name + ".mjs")).isFile());
 }
+assert.deepEqual(manifest.startup, [
+  {
+    command: [
+      "sh",
+      "-c",
+      'exec node "$HERDR_PLUGIN_ROOT/src/expiry-startup.mjs"',
+    ],
+  },
+]);
+assert.ok(fs.statSync(path.join(root, "src/expiry-startup.mjs")).isFile());
 for (const a of manifest.actions)
   assert.deepEqual(a.contexts, ["workspace", "pane"]);
 console.log(

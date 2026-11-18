@@ -7,6 +7,12 @@ exact merged commit `c5a3249f7538ecd9959c0222f95f2042af3e680c` inspected on
 2026-11-18. Its MIT notice is retained in LICENSE. Vultr provider lifecycle and
 wire contracts replace Hetzner semantics; no provider conformance is inherited.
 
+Confirmed-idle policy, controller, host-service definitions and related tests are
+also adapted from its reviewed immutable commit
+`df8cb6ce81504581be48c10f7f8b4af55df8ab2f`, including ancestor
+`1aba7b38f55325f10de9d8b2237a3e25412e47b2`. Vultr's actual guest-session,
+SSH timeout and provider lifecycle contracts are preserved separately.
+
 Source capture, patch review/apply and recovery, host state locking, context,
 Herdr pane launching, process helpers and tests are adapted from the MIT-licensed
 [Herdr Daytona Sandbox plugin](https://github.com/allagentsdev/herdr-daytona-sandbox-plugin),

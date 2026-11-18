@@ -116,7 +116,12 @@ export function tmuxCommand(r) {
   return `set -eu\nexec 9>${q(state + "/tmux.lock")}\nflock 9\nif ! tmux has-session -t ${q(session)} 2>/dev/null; then\nif [ -e ${q(state + "/started")} ]; then test -f ${q(state + "/resume-approved")}; fi\ntmux new-session -d -s ${q(session)} \\; set-option -t ${q(session)} remain-on-exit on \\; respawn-pane -k -t ${q(session)} ${q(`bash ${q(state + "/launch.sh")}`)}\nfi\ntmux set-hook -t ${q(session)} pane-died ${q(`detach-client -s ${session}`)}\nflock -u 9`;
 }
 export class SSH {
-  constructor(store, config, { run = runSync, spawnProcess = spawn } = {}) {
+  constructor(
+    store,
+    config,
+    { run = runSync, spawnProcess = spawn, commandTimeout = 300000 } = {},
+  ) {
+    this.commandTimeout = commandTimeout;
     this.store = store;
     this.config = config;
     this.run = run;
@@ -142,7 +147,7 @@ export class SSH {
       maxBuffer = 32 * 1024 * 1024,
       agentKind,
       check = true,
-      timeout = 300000,
+      timeout = this.commandTimeout,
     } = {},
   ) {
     const env = { ...process.env };

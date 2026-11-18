@@ -6,6 +6,151 @@ import { runWorker } from "../src/pane.mjs";
 import { temporary } from "./helpers.mjs";
 import { requestWorker } from "../src/control.mjs";
 import { setTimeout as delay } from "node:timers/promises";
+import { repository, write } from "./helpers.mjs";
+import { validateConfig } from "../src/config.mjs";
+import { captureSnapshot } from "../src/manifest.mjs";
+import path from "node:path";
+
+test("source review discloses recurring exact-worker idle release and saves consent before create; explicit off stays off", async (t) => {
+  for (const idleTimeoutMinutes of [0, 15]) {
+    const store = new Store(temporary(t)),
+      id = randomUUID(),
+      localRoot = repository(t),
+      output = [];
+    write(localRoot, "source.txt", "review these bytes\n");
+    await store.create({
+      id,
+      namespace: "fixture",
+      localRoot,
+      config: validateConfig({ idleTimeoutMinutes }),
+      vm: { serverId: randomUUID(), hostKey: "pin" },
+    });
+    let creates = 0;
+    await runWorker({
+      store,
+      id,
+      initialAction: "start-agent",
+      services: {
+        life: {
+          create: async () => {
+            creates++;
+            const r = store.get(id);
+            assert.ok(r.uploadApproval.digest);
+            if (idleTimeoutMinutes) {
+              assert.equal(r.expiry.minutes, 15);
+              assert.equal(r.expiry.mode, "idle");
+              assert.ok(r.expiry.approvedAt);
+              assert.equal(r.expiry.session, null);
+            } else assert.equal(r.expiry, null);
+            throw Object.assign(Error("fixture stops before allocation"), {
+              code: "fixture_stop",
+            });
+          },
+        },
+      },
+      askInput: async (prompt) =>
+        `UPLOAD ${prompt.match(/UPLOAD ([a-f0-9]{64})/)[1]}`,
+      display: (line) => output.push(line),
+      resolvePane: () => "fixture:p1",
+      menuInput: async () => "q",
+    });
+    assert.equal(creates, 1);
+    const review = output.find((line) => line.startsWith("Worker:"));
+    assert.ok(review.includes(id));
+    assert.ok(
+      review.includes(
+        idleTimeoutMinutes
+          ? "15 minutes of confirmed inactivity"
+          : "Automatic hibernation is disabled",
+      ),
+    );
+    if (idleTimeoutMinutes) assert.ok(review.includes("host user service"));
+  }
+});
+
+test("dashboard idle actions use fixed 15 minute policy and exact-worker enable/disable confirmations", async (t) => {
+  const store = new Store(temporary(t)),
+    id = randomUUID(),
+    calls = [];
+  await store.create({
+    id,
+    namespace: "fixture",
+    localRoot: temporary(t),
+    config: {},
+  });
+  const menu = ["delay-hibernation", "disable-auto-hibernate", "q"];
+  await runWorker({
+    store,
+    id,
+    initialAction: "enable-auto-hibernate",
+    services: {
+      life: {
+        configureExpiry: async (...args) => calls.push(["enable", ...args]),
+        extendExpiry: async (...args) => calls.push(["delay", ...args]),
+        disableExpiry: async (...args) => calls.push(["disable", ...args]),
+      },
+    },
+    askInput: async (prompt) =>
+      prompt.includes("DISABLE")
+        ? `DISABLE AUTO-HIBERNATE ${id}`
+        : `AUTO-HIBERNATE ${id}`,
+    display: () => {},
+    resolvePane: () => "fixture:p1",
+    menuInput: async () => menu.shift(),
+  });
+  assert.deepEqual(calls, [
+    ["enable", id, 15, `AUTO-HIBERNATE ${id}`],
+    ["delay", id, 15],
+    ["disable", id, `DISABLE AUTO-HIBERNATE ${id}`],
+  ]);
+});
+
+test("an existing upload approval is reused without acquiring automatic-release consent", async (t) => {
+  const store = new Store(temporary(t)),
+    id = randomUUID(),
+    localRoot = repository(t),
+    config = validateConfig();
+  write(localRoot, "source.txt", "already reviewed\n");
+  const snapshot = captureSnapshot(
+    localRoot,
+    config,
+    path.join(store.artifacts(id), "baseline"),
+  );
+  await store.create({
+    id,
+    namespace: "fixture",
+    localRoot,
+    config,
+    baseline: snapshot.directory,
+    uploadApproval: { digest: snapshot.digest },
+    vm: { serverId: randomUUID(), hostKey: "pin" },
+  });
+  let creates = 0;
+  await runWorker({
+    store,
+    id,
+    initialAction: "start-agent",
+    services: {
+      life: {
+        create: async () => {
+          creates++;
+          assert.equal(store.get(id).expiry, undefined);
+          throw Object.assign(Error("stop fixture before compute"), {
+            code: "fixture_stop",
+          });
+        },
+      },
+    },
+    askInput: async () => {
+      assert.fail("existing source should not be reapproved");
+    },
+    display: () => {},
+    resolvePane: () => "fixture:p1",
+    menuInput: async () => "q",
+  });
+  assert.equal(creates, 1);
+  assert.equal(store.get(id).expiry, undefined);
+});
 
 test("continuation metadata waits for the actual attached agent and records acceptance", async (t) => {
   const store = new Store(temporary(t)),
