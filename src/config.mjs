@@ -14,6 +14,7 @@ export function safeRelative(p) {
 }
 export function validateConfig(raw = {}) {
   const allowed = new Set([
+    "idleTimeoutMinutes",
     "osId",
     "plan",
     "region",
@@ -53,6 +54,7 @@ export function validateConfig(raw = {}) {
     for (const key of Object.keys(raw.adapter))
       if (
         ![
+          "activity",
           "install",
           "authCheck",
           "launch",
@@ -91,6 +93,7 @@ export function validateConfig(raw = {}) {
   validateCustomProfiles(raw.customAgents ?? {});
   if (raw.hostKeyMode !== undefined && raw.hostKeyMode !== "provisioned") bad();
   const c = {
+    idleTimeoutMinutes: 15,
     osId: 2284,
     plan: "vc2-2c-4gb",
     region: "syd",
@@ -104,6 +107,7 @@ export function validateConfig(raw = {}) {
     allowCandidateAgents: false,
     hostKeyMode: "provisioned",
     adapter: {
+      activity: "",
       install: "",
       authCheck: "command -v codex >/dev/null && codex login status",
       launch: "codex",
@@ -115,6 +119,7 @@ export function validateConfig(raw = {}) {
   };
   delete c.uploadExcludes;
   c.adapter = {
+    activity: "",
     install: "",
     authCheck: "",
     launch: "",
@@ -129,6 +134,7 @@ export function validateConfig(raw = {}) {
       "Invalid configuration. See README configuration contract.",
     );
   };
+  if (![0, 15].includes(c.idleTimeoutMinutes)) invalid();
   for (const k of ["maxFiles", "maxFileBytes", "maxUploadBytes"])
     if (!Number.isSafeInteger(c[k]) || c[k] <= 0) invalid();
   if (
@@ -149,6 +155,7 @@ export function validateConfig(raw = {}) {
   if (!/^vc2-[1-9][0-9]*c-[1-9][0-9]*gb$/.test(c.plan) || c.osId !== 2284)
     invalid();
   for (const k of [
+    "activity",
     "install",
     "authCheck",
     "launch",

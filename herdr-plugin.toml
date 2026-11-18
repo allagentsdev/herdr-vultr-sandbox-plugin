@@ -122,6 +122,27 @@ title = "Resume an exited remote agent"
 contexts = ["workspace", "pane"]
 command = ["sh", "-c", 'exec node "$HERDR_PLUGIN_ROOT/src/action.mjs"']
 
+[[actions]]
+id = "enable-auto-hibernate"
+title = "Enable automatic 15-minute idle hibernation"
+contexts = ["workspace", "pane"]
+command = ["sh", "-c", 'exec node "$HERDR_PLUGIN_ROOT/src/action.mjs"']
+
+[[actions]]
+id = "delay-hibernation"
+title = "Delay automatic Vultr hibernation by 15 minutes"
+contexts = ["workspace", "pane"]
+command = ["sh", "-c", 'exec node "$HERDR_PLUGIN_ROOT/src/action.mjs"']
+
+[[actions]]
+id = "disable-auto-hibernate"
+title = "Disable automatic Vultr hibernation (compute stays billed)"
+contexts = ["workspace", "pane"]
+command = ["sh", "-c", 'exec node "$HERDR_PLUGIN_ROOT/src/action.mjs"']
+
+[[startup]]
+command = ["sh", "-c", 'exec node "$HERDR_PLUGIN_ROOT/src/expiry-startup.mjs"']
+
 [[panes]]
 id = "worker"
 title = "Vultr worker"

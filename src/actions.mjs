@@ -14,6 +14,7 @@ import { requestWorker, hasLiveOwner } from "./control.mjs";
 import { inspectConfiguration } from "./onboarding.mjs";
 import { Cloud } from "./provider.mjs";
 import { Lifecycle } from "./lifecycle.mjs";
+import { controllerStatus } from "./expiry-service.mjs";
 import { PluginError } from "./result.mjs";
 export async function runAction(action, { worker } = {}, options = {}) {
   if (!ACTIONS.includes(action))
@@ -126,7 +127,10 @@ export async function runAction(action, { worker } = {}, options = {}) {
     return {
       status: "observed",
       ...workerInfo(record),
-      provider: await life.status(record.id),
+      provider: {
+        ...(await life.status(record.id)),
+        controller: controllerStatus(store),
+      },
     };
   }
   if (record) {

@@ -3,13 +3,15 @@
 Persistent Linux coding workers for Herdr, plugin ID `vultr.sandbox`. One logical
 worker has one dedicated Vultr Cloud Compute instance. A worker UUID survives
 power-off and snapshot restore; instance and snapshot IDs are separate resources.
-Closing a pane disconnects the UI and leaves the worker and billed allocation.
+Closing a pane disconnects the UI. A consented host user service can hibernate the
+worker after 15 minutes of confirmed inactivity; allocated compute remains billed
+until release completes.
 
 This is a candidate implementation. An owner-authorized live trial verified the
 merged legacy worker's bootstrap, independent Codex login and allocated resume,
 plus separate native guest Herdr/Codex process proofs. **Full lifecycle
-conformance remains open**, including live verification of the provider Stop correction below and
-the complete fresh-worker native Herdr path. Local fake-provider tests and
+conformance remains open**, including the complete fresh-worker native Herdr path
+and automatic idle release/restore. Local fake-provider tests and
 isolated actual Herdr 0.9.5 contracts remain separate evidence.
 See [capabilities](docs/capability-parity.md), [architecture](docs/adr/0001-vultr-worker-lifecycle.md)
 and [verification](docs/verification.md).
@@ -133,8 +135,9 @@ public client key is installed explicitly for root.
 All SSH connections use strict per-instance pins, isolated known-hosts, no host
 SSH configuration, no SSH agent and no forwarding. New boxes need no console or
 fingerprint ritual. A bounded pinned readiness wait handles boot delay without
-weakening trust. Noninteractive SSH commands have a five-minute deadline
-(with shorter readiness probes) and server-alive checks; a timeout may leave a
+weakening trust. Noninteractive SSH commands have a five-minute deadline;
+controller jobs use two minutes and readiness probes use 20 seconds. Server-alive
+checks also apply. A timeout may leave a
 remote command applied and never grants blind lifecycle replay. Readiness and
 authentication checks preserve `command_timeout`; it does not imply missing
 credentials or authorize Login. Interactive
@@ -176,11 +179,16 @@ behavior; an omitted check is not proof of authenticated access. `agentArgs`
 maps an agent kind to a quoted string argument array. Commands and service hooks
 are trusted remote root code. Unknown fields are rejected.
 
-The six `adapter` hooks (`install`, `authCheck`, `launch`, `resume`, `quiesce`,
-`restart`) also support custom commands; raw adapters require nonempty launch,
+The `adapter` hooks (`install`, `authCheck`, `launch`, `resume`, `quiesce`,
+`restart`, `activity`) also support custom commands; raw adapters require nonempty launch,
 resume and authCheck. Built-ins may use service quiesce/restart hooks. Configure
 repeatable service flush/stop and restart commands when the work needs them.
-Filesystem snapshots alone do not establish application consistency.
+Filesystem snapshots alone do not establish application consistency. Work with
+background services needs an application-aware `activity` command. It must print
+JSON such as `{"state":"idle","token":"unchanged-application-state"}`,
+`{"state":"working"}` or `{"state":"blocked"}`. Idle tokens must be nonempty
+strings of at most 256 characters; only their SHA256 hashes are saved. Probe
+failure or invalid output means unknown activity and retains billed compute.
 
 ## Dashboard and lifecycle
 
@@ -188,12 +196,41 @@ The live trial found that guest shutdown acknowledgement and disappearing SSH
 did not establish provider OFF. Normal Stop and Hibernate now quiesce the agent
 and configured services, persist a flushed source checkpoint, then submit Vultr's
 exact provider Stop (`POST /instances/<ID>/halt`) and poll fresh provider state.
-Hibernate also cleans and flushes cloud-init's clone cache before Stop. This is
+Hibernate and Stop with an approved idle policy also clean and flush cloud-init's
+clone cache before Stop. This is
 one normal provider operation, with durable intent and a separate acknowledgement;
 it is not a guest-shutdown fallback. Application consistency depends on the
 configured quiesce hooks and checkpoint, not an assumed provider OS shutdown
-behavior. Local tests cover this correction; an authorized live trial remains
-pending. See the [verification limits](docs/verification.md#live-provider-stop-gate).
+behavior. The legacy Stop trial is verified; fresh native and automatic lifecycle
+conformance remain pending. See the [verification limits](docs/verification.md#live-provider-stop-gate).
+
+New source review defaults to an explicit recurring authorization for this worker:
+after 15 minutes of continuously confirmed idle activity, quiesce, checkpoint,
+prepare the clone, Halt, verify provider OFF and a complete recovery snapshot,
+then delete the exact bound instance. The installed host user service survives
+pane and Herdr exits. It must confirm readiness before a new consented allocation
+or power-on. Existing approved workers are not opted in by an upgrade; use
+`enable-auto-hibernate` and type the displayed worker UUID confirmation.
+`idleTimeoutMinutes` accepts only `15` (new-worker default) or `0` (off for new
+workers). It does not change existing saved policies.
+
+Working, blocked and unknown activity stays protected. The idle window resets on
+changed activity tokens or an observation gap over 90 seconds. A final fresh idle
+check precedes automatic quiescence. Native activity uses the actual persisted
+worker/session/workspace/pane/terminal and detected agent identity through the
+existing guest helper. Legacy tmux without an explicit activity probe stays
+unknown. Silence, disconnection, missing authentication and missing metadata do
+not prove idle. Resume/restore starts a fresh bound session with unknown activity;
+reconnect preserves current observations. `delay-hibernation` adds a fixed
+15-minute floor to the candidate expiry; it does not create a lifetime limit on
+active work. `disable-auto-hibernate` requires exact-worker confirmation.
+
+No automatic release can run while the host is offline or its user service is
+stopped. On return, stale activity requires a new idle window; already quiesced,
+authorized operations can reconcile their retained receipts. Failures retain the
+instance and previous good image. This is not a spending cap or provider-managed
+timeout. Management tokens and the client private key stay on the host; snapshots
+retain independent remote agent credentials and remain sensitive and billed.
 
 New logical workers run pinned stock Herdr 0.9.5 on the guest, with a private
 `worker-<UUID>` session and durable state under the worker directory. Reconnect
@@ -218,18 +255,21 @@ independent guest agent login remain in force. The dashboard is never an agent
 input target. Local continuation metadata contains the absolute reconnect command,
 never an invented native conversation ID.
 
-| Control          | Behavior                                                                                                                    |
-| ---------------- | --------------------------------------------------------------------------------------------------------------------------- |
-| Stop             | Quiesce, durable source checkpoint, exact provider Stop, poll fresh Vultr OFF; still billed                                 |
-| Resume allocated | Start only a confirmed stopped instance, then pinned SSH/auth/services; running instances are not restarted                 |
-| Hibernate        | Quiesce/checkpoint, clean cloud-init clone cache, provider Stop and fresh OFF, snapshot checks, then exact release approval |
-| Release          | `DELETE <instance ID> SNAPSHOT <snapshot ID>`; cancelled approval retains the off, billed instance                          |
-| Resume snapshot  | New instance/host pin on the same frozen plan; verify worker/checkpoint/source/auth and run restart hooks                   |
-| Delete server    | Exact `DELETE <instance ID>`; intentionally destructive disk deletion; snapshots retained                                   |
-| Replace / Forget | Exact deletion or unallocated-worker approval; mappings change only after confirmed deletion; recovery history retained     |
-| Recover          | Observe retained create/power/snapshot/delete receipt without duplicate submission                                          |
-| Apply changes    | Validate returned source/patch receipt and exact `APPLY <digest>`; preserve host index and unrelated local changes          |
-| q / pane close   | Close local control surface only; no cloud deletion or stop implied                                                         |
+| Control                | Behavior                                                                                                                    |
+| ---------------------- | --------------------------------------------------------------------------------------------------------------------------- |
+| Stop                   | Quiesce, durable source checkpoint, exact provider Stop, poll fresh Vultr OFF; still billed                                 |
+| Resume allocated       | Start only a confirmed stopped instance, then pinned SSH/auth/services; running instances are not restarted                 |
+| Hibernate              | Quiesce/checkpoint, clean cloud-init clone cache, provider Stop and fresh OFF, snapshot checks, then exact release approval |
+| Enable auto-hibernate  | Exact-worker recurring approval for release after 15 minutes of confirmed inactivity; host user service required            |
+| Delay hibernation      | Add a fixed 15-minute deferral while preserving activity protection                                                         |
+| Disable auto-hibernate | Exact-worker confirmation; allocated compute remains billed                                                                 |
+| Release                | `DELETE <instance ID> SNAPSHOT <snapshot ID>`; cancelled approval retains the off, billed instance                          |
+| Resume snapshot        | New instance/host pin on the same frozen plan; verify worker/checkpoint/source/auth and run restart hooks                   |
+| Delete server          | Exact `DELETE <instance ID>`; intentionally destructive disk deletion; snapshots retained                                   |
+| Replace / Forget       | Exact deletion or unallocated-worker approval; mappings change only after confirmed deletion; recovery history retained     |
+| Recover                | Observe retained create/power/snapshot/delete receipt without duplicate submission                                          |
+| Apply changes          | Validate returned source/patch receipt and exact `APPLY <digest>`; preserve host index and unrelated local changes          |
+| q / pane close         | Close local control surface only; no cloud deletion or stop implied                                                         |
 
 Vultr returns no Hetzner action IDs. A durable receipt records operation UUID,
 submission intent/time, exact resource and acknowledgement; observed state
