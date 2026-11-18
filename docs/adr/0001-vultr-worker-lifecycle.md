@@ -87,6 +87,12 @@ commands are trusted operator root code, not an isolation mechanism.
 
 ## Operations, identity and recovery
 
+Host JSON writes sync the private temporary file before atomic replacement, then
+sync the parent directory before returning. A failed sync prevents the following
+provider mutation; a failure after rename can leave a conservative attempted
+receipt that still forbids replay. These Linux filesystem barriers do not claim
+empirical host power-loss survival or guarantees beyond the storage stack.
+
 Persist intent before every external mutation. Vultr's create returns an
 instance, and Start/Stop/delete return acknowledgements, without action IDs. Exact
 instance operation tags and snapshot descriptions let an unknown create or
@@ -123,7 +129,14 @@ observations never authorize replay. Historical guest-shutdown receipts retain
 their original meaning and can only settle by observing their target state;
 they cannot authorize a new provider Stop. Recheck ownership and attached blocks
 before first submission. Start is sent only for a confirmed stopped instance
-because it may restart one already running.
+because it may restart one already running. Allocated Resume durably retires
+Hibernate quiescence and release authority after target/pending validation and
+before Start or already-running settlement. A restart hook can launch writers
+before failing, so even failed Resume requires a fresh Stop checkpoint. Saved
+snapshots remain; readiness is recorded only after its existing verification gates.
+Stop also retires obsolete Hibernate authority before beginning fresh quiesce
+outside the retained shutdown stage, covering failed-Resume records from older
+versions. Unchanged quiescent Hibernate recovery retains its original checkpoint.
 Hibernation requires completed exact-operation snapshot and the durable
 checkpoint before a separate exact-instance-and-snapshot release approval.
 Cancellation or failure keeps the off, billed instance and previous snapshot.

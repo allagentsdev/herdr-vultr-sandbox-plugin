@@ -614,6 +614,8 @@ test("Hibernate cannot snapshot before fresh OFF and never repeats an uncertain 
     assert.equal(stops, 1);
     assert.equal(f.calls.filter((c) => c.url === "/snapshots").length, 1);
     assert.equal(f.store.get(f.id).hibernate.stage, "release");
+    for (const hook of ["quiesce", "checkpoint", "prepareSnapshot"])
+      assert.equal(f.calls.filter((call) => call === hook).length, 1);
   }
 });
 
@@ -642,4 +644,135 @@ test("explicit retry after definitive Stop rejection must pass fresh ownership a
     code: "ownership_mismatch",
   });
   assert.equal(attempts, 1);
+});
+
+test("allocated Resume retires old release authority before a failed Start and keeps the snapshot", async (t) => {
+  for (const code of ["outcome_unknown", "provider_rejected"]) {
+    const f = await fixture(t),
+      release = await f.life.hibernate(f.id),
+      snapshot = f.store.get(f.id).snapshot;
+    let starts = 0;
+    f.api.request = async (method, url) => {
+      starts++;
+      assert.equal(method, "POST");
+      assert.equal(url, "/instances/vm/start");
+      assert.equal(f.store.get(f.id).hibernate, null);
+      assert.deepEqual(f.store.get(f.id).snapshot, snapshot);
+      throw Object.assign(Error("Start failed"), { code, httpStatus: 429 });
+    };
+    await assert.rejects(f.life.power(f.id, "poweron"), { code });
+    await assert.rejects(f.life.release(f.id, release.confirmation), {
+      code: "approval_required",
+    });
+    assert.deepEqual(f.store.get(f.id).snapshot, snapshot);
+    assert.equal(starts, 1);
+    if (code === "outcome_unknown") {
+      await assert.rejects(f.life.power(f.id, "poweron"), { code });
+      assert.equal(starts, 1);
+    }
+  }
+});
+
+test("Resume cannot start or settle running state when retiring Hibernate authority fails to persist", async (t) => {
+  for (const running of [false, true]) {
+    const f = await fixture(t),
+      release = await f.life.hibernate(f.id),
+      saved = f.store.get(f.id),
+      update = f.store.update.bind(f.store);
+    if (running) f.setPower("running");
+    f.calls.length = 0;
+    f.store.update = (id, fn) =>
+      update(id, (record) => {
+        const next = fn(record);
+        if (record.hibernate && next.hibernate === null)
+          throw Error("retirement write failed");
+        return next;
+      });
+    await assert.rejects(
+      f.life.power(f.id, "poweron"),
+      /retirement write failed/,
+    );
+    assert.deepEqual(f.calls, []);
+    assert.deepEqual(f.store.get(f.id).hibernate, saved.hibernate);
+    assert.deepEqual(f.store.get(f.id).snapshot, saved.snapshot);
+    assert.equal(release.confirmation, "DELETE vm SNAPSHOT snap");
+  }
+});
+
+test("invalid Resume ownership, blocks or pending target cannot retire retained Hibernate authority", async (t) => {
+  for (const problem of ["owner", "blocks", "pending", "target"]) {
+    const f = await fixture(t);
+    await f.life.hibernate(f.id);
+    const saved = f.store.get(f.id),
+      get = f.api.getServer;
+    f.calls.length = 0;
+    if (problem === "owner" || problem === "blocks")
+      f.api.getServer = async () => ({
+        ...(await get()),
+        ...(problem === "owner" ? { tags: [] } : { volumes: ["block"] }),
+      });
+    else
+      await f.store.update(f.id, (r) => ({
+        ...r,
+        pending: {
+          kind: problem === "pending" ? "shutdown" : "poweron",
+          operation: randomUUID(),
+          serverId: problem === "target" ? "other" : "vm",
+          attempted: false,
+        },
+      }));
+    await assert.rejects(f.life.power(f.id, "poweron"), {
+      code: {
+        owner: "ownership_mismatch",
+        blocks: "volumes_unsupported",
+        pending: "operation_pending",
+        target: "stale_server",
+      }[problem],
+    });
+    assert.deepEqual(f.store.get(f.id).hibernate, saved.hibernate);
+    assert.deepEqual(f.store.get(f.id).snapshot, saved.snapshot);
+    assert.deepEqual(f.calls, []);
+  }
+});
+
+test("fresh pre-snapshot read rejects a restarted provider and retains the previous snapshot", async (t) => {
+  const f = await fixture(t),
+    wait = f.api.waitStatus;
+  f.api.waitStatus = async (...args) => {
+    const stopped = await wait.apply(f.api, args);
+    f.setPower("running");
+    return stopped;
+  };
+  await assert.rejects(f.life.hibernate(f.id), { code: "server_not_off" });
+  assert.equal(
+    f.calls.some((call) => call.url === "/snapshots"),
+    false,
+  );
+  assert.equal(f.store.get(f.id).snapshot.imageId, "old");
+  assert.equal(f.store.get(f.id).hibernate.stage, "snapshot");
+});
+
+test("fresh Stop retires retained pre-retirement failed-Resume release authority before quiescing", async (t) => {
+  const f = await fixture(t),
+    release = await f.life.hibernate(f.id),
+    snapshot = f.store.get(f.id).snapshot,
+    quiesce = f.remote.quiesce;
+  // Characterized by the real previous-lifecycle failed restart-hook route.
+  f.setPower("running");
+  f.remote.quiesce = async (...args) => {
+    assert.equal(f.store.get(f.id).hibernate, null);
+    return quiesce(...args);
+  };
+  f.calls.length = 0;
+  await f.life.power(f.id, "shutdown");
+  await assert.rejects(f.life.release(f.id, release.confirmation), {
+    code: "approval_required",
+  });
+  assert.deepEqual(f.store.get(f.id).snapshot, snapshot);
+  assert.equal(f.store.get(f.id).powerCheckpoint.workerId, f.id);
+  assert.deepEqual(f.calls.slice(0, 2), ["quiesce", "checkpoint"]);
+  assert.equal(
+    f.calls.some((call) => call.method === "DELETE"),
+    false,
+  );
 });

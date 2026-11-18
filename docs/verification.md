@@ -115,6 +115,23 @@ retry after definitive rejection, ownership/target/block gates, OFF idempotency,
 Start protection and stopped-but-locked remaining transitioning. Existing snapshot
 identity/checkpoint/release and restore-readiness proofs remain intact.
 
+The failed allocated Resume regression runs the actual activation command through
+an owned local shell: a configured restart hook launches a synthetic writer and
+then fails. Its heartbeat advances after the failure; normal Stop waits for that
+writer to exit before capturing fresh source. Both stopped and already-running
+allocated Resume retire the old release authority, including failed Start or
+activation, while retaining the previous snapshot. A separate upgrade proof runs
+the previous lifecycle through the failing hook, reuses its actual stored record
+with the corrected lifecycle, and verifies fresh Stop retires the obsolete release. Intentional Recover of an
+unchanged quiescent Hibernate stage still skips repeated hooks and mutations.
+
+Real Store tests observe file fsync, rename, parent-directory fsync, then the
+synthetic provider request in that order. Injected file/directory sync failures
+prevent submission, close descriptors and remove owned temporary files; a
+post-rename directory-sync failure retains an attempted receipt and prevents
+replay. This checks the actual persistence protocol and failure gating. No host
+power loss, hardware durability experiment or live provider operation is implied.
+
 These are local synthetic boundary proofs. The correction still needs an
 authorized live trial. A retained legacy image restore can verify its own
 provider/source/auth behavior but cannot establish native conformance. A separate

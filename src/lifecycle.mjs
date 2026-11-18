@@ -254,11 +254,15 @@ export class Lifecycle {
       fail("operation_pending", "Finish the retained operation first.");
     if (r.pending && r.pending.serverId !== r.vm.serverId)
       fail("stale_server", "Power receipt targets another instance.");
+    if (kind === "poweron" && r.hibernate)
+      r = await this.store.update(id, (v) => ({ ...v, hibernate: null }));
     const status = kind === "shutdown" ? "off" : "running";
     if (s.powerState === status)
       return this.store.update(id, (v) => ({ ...v, pending: null }));
     if (!r.pending) {
-      if (kind === "shutdown" && !r.hibernate) {
+      if (kind === "shutdown" && r.hibernate?.stage !== "shutdown") {
+        if (r.hibernate)
+          r = await this.store.update(id, (v) => ({ ...v, hibernate: null }));
         await this.remote.quiesce(r);
         const checkpoint = await this.remote.checkpoint(r);
         r = await this.store.update(id, (v) => ({
